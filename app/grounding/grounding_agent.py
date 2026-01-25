@@ -35,6 +35,14 @@ from app.grounding.models import (
     VibeCategory,
 )
 
+# Optional DB import - only used if save_to_db=True
+try:
+    from app.db.repository import save_grounding_results
+    DB_AVAILABLE = True
+except ImportError:
+    DB_AVAILABLE = False
+    save_grounding_results = None
+
 logger = structlog.get_logger()
 
 
@@ -614,11 +622,17 @@ Rules for scoring:
         self,
         requirement: LocationRequirement,
         verify_visuals: bool = True,
+        save_to_db: bool = False,
     ) -> GroundingResult:
         """
         Find locations and optionally verify their visual vibe.
 
         This is the main entry point that combines grounding + visual verification.
+
+        Args:
+            requirement: The location requirement to search for
+            verify_visuals: Whether to run visual vibe verification
+            save_to_db: Whether to save results to Supabase
         """
         # First, find locations via Google Maps grounding
         result = await self.find_locations(requirement)
@@ -649,4 +663,62 @@ Rules for scoring:
                         f"{low_visual_count} locations have low visual vibe match (<0.5)"
                     )
 
+        # Save to database if enabled
+        if save_to_db:
+            if DB_AVAILABLE and save_grounding_results:
+                save_grounding_results([result])
+                logger.info("Saved results to database", scene=requirement.scene_header)
+            else:
+                logger.warning("Database not available, skipping save")
+
         return result
+
+    async def process_scenes(
+        self,
+        requirements: list[LocationRequirement],
+        verify_visuals: bool = True,
+        save_to_db: bool = False,
+    ) -> list[GroundingResult]:
+        """
+        Process multiple scenes with grounding + visual verification.
+
+        This is the main batch entry point. Saves all results at the end.
+
+        Args:
+            requirements: List of location requirements to process
+            verify_visuals: Whether to run visual vibe verification
+            save_to_db: Whether to save results to Supabase
+        """
+        results = []
+
+        for requirement in requirements:
+            logger.info(
+                "Processing scene",
+                scene=requirement.scene_header,
+                vibe=requirement.vibe.primary.value,
+            )
+
+            # Process without saving (we batch save at end)
+            result = await self.find_and_verify_locations(
+                requirement,
+                verify_visuals=verify_visuals,
+                save_to_db=False,
+            )
+            results.append(result)
+
+            logger.info(
+                "Found candidates",
+                scene=requirement.scene_header,
+                count=result.total_found,
+                errors=len(result.errors),
+            )
+
+        # Batch save all results at end
+        if save_to_db:
+            if DB_AVAILABLE and save_grounding_results:
+                summary = save_grounding_results(results)
+                logger.info("Batch saved to database", **summary)
+            else:
+                logger.warning("Database not available, skipping save")
+
+        return results

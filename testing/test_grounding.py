@@ -122,7 +122,7 @@ def save_results(results: list[GroundingResult], output_dir: Path) -> None:
         print(f"\nSaved: {filepath}")
 
 
-async def test_single_scene() -> None:
+async def test_single_scene(save_db: bool = False) -> None:
     """Test grounding with a single scene."""
     print("\n" + "=" * 60)
     print("STAGE 2 GROUNDING TEST - Single Scene")
@@ -134,16 +134,19 @@ async def test_single_scene() -> None:
     print(f"Descriptors: {', '.join(requirement.vibe.descriptors)}")
 
     agent = GroundingAgent()
-    result = await agent.find_locations(requirement)
+    result = await agent.find_and_verify_locations(requirement, save_to_db=save_db)
 
     print_result(result)
 
-    # Save results
+    # Save results to JSON
     output_dir = Path(__file__).parent / "output"
     save_results([result], output_dir)
 
+    if save_db:
+        print("\n[Results saved to Supabase]")
 
-async def test_all_scenes() -> None:
+
+async def test_all_scenes(save_db: bool = False) -> None:
     """Test grounding with all sample scenes."""
     print("\n" + "=" * 60)
     print("STAGE 2 GROUNDING TEST - All Scenes")
@@ -155,14 +158,17 @@ async def test_all_scenes() -> None:
     print("\nStarting grounding for all scenes...")
 
     agent = GroundingAgent()
-    results = await agent.find_locations_for_scenes(requirements)
+    results = await agent.process_scenes(requirements, save_to_db=save_db)
 
     for result in results:
         print_result(result)
 
-    # Save results
+    # Save results to JSON
     output_dir = Path(__file__).parent / "output"
     save_results(results, output_dir)
+
+    if save_db:
+        print("\n[Results saved to Supabase]")
 
     # Print summary
     print("\n" + "=" * 60)
@@ -203,7 +209,7 @@ async def test_all_scenes() -> None:
     print(f"Total processing time: {total_time:.2f}s")
 
 
-async def test_specific_scene(scene_number: str) -> None:
+async def test_specific_scene(scene_number: str, save_db: bool = False) -> None:
     """Test grounding for a specific scene by number."""
     requirements = get_sample_requirements()
 
@@ -229,13 +235,16 @@ async def test_specific_scene(scene_number: str) -> None:
     print(f"Descriptors: {', '.join(requirement.vibe.descriptors)}")
 
     agent = GroundingAgent()
-    result = await agent.find_locations(requirement)
+    result = await agent.find_and_verify_locations(requirement, save_to_db=save_db)
 
     print_result(result)
 
-    # Save results
+    # Save results to JSON
     output_dir = Path(__file__).parent / "output"
     save_results([result], output_dir)
+
+    if save_db:
+        print("\n[Results saved to Supabase]")
 
 
 def main():
@@ -258,6 +267,11 @@ def main():
         action="store_true",
         help="List available sample scenes"
     )
+    parser.add_argument(
+        "--save-db",
+        action="store_true",
+        help="Save results to Supabase database"
+    )
 
     args = parser.parse_args()
 
@@ -273,11 +287,11 @@ def main():
 
     # Run appropriate test
     if args.scene:
-        asyncio.run(test_specific_scene(args.scene))
+        asyncio.run(test_specific_scene(args.scene, save_db=args.save_db))
     elif args.all:
-        asyncio.run(test_all_scenes())
+        asyncio.run(test_all_scenes(save_db=args.save_db))
     else:
-        asyncio.run(test_single_scene())
+        asyncio.run(test_single_scene(save_db=args.save_db))
 
 
 if __name__ == "__main__":
