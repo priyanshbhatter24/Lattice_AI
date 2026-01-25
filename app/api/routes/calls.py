@@ -29,6 +29,7 @@ class TriggerCallRequest(BaseModel):
     """Request to trigger a single call."""
 
     candidate_id: str
+    override_phone_number: str | None = None  # For testing - overrides candidate phone
 
 
 class TriggerBatchRequest(BaseModel):
@@ -89,6 +90,10 @@ async def trigger_call(request: TriggerCallRequest) -> CallResponse:
 
     # Build LocationCandidate from database dict
     candidate = LocationCandidate(**candidate_data)
+
+    # Override phone for testing if provided
+    if request.override_phone_number:
+        candidate.phone_number = request.override_phone_number
 
     # Build project context
     project_context = ProjectContext(
