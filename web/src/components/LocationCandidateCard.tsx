@@ -40,7 +40,8 @@ export default function LocationCandidateCard({
     candidate.vapi_call_status === "in_progress";
 
   const hasCallResults =
-    candidate.vapi_call_status === "completed" && candidate.venue_available !== undefined;
+    candidate.vapi_call_status === "completed" &&
+    (candidate.venue_available !== undefined || candidate.call_summary);
 
   const canApprove =
     candidate.vapi_call_status === "completed" &&
@@ -246,46 +247,32 @@ export default function LocationCandidateCard({
               </p>
             )}
 
-            {/* Success score */}
-            {candidate.call_success_score !== undefined && (
-              <div
+            {/* Availability details (e.g., "Tuesday at 11:00 AM") */}
+            {candidate.availability_details && candidate.availability_details !== "[]" && (
+              <p
                 style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "0.5rem",
-                  marginTop: "0.5rem",
+                  fontSize: "0.75rem",
+                  color: "var(--color-text-secondary)",
+                  marginTop: "0.375rem",
                 }}
               >
-                <span style={{ fontSize: "0.6875rem", color: "var(--color-text-muted)" }}>
-                  Call quality:
-                </span>
-                <div
-                  style={{
-                    flex: 1,
-                    height: "4px",
-                    backgroundColor: "var(--color-bg-muted)",
-                    borderRadius: "2px",
-                    overflow: "hidden",
-                  }}
-                >
-                  <div
-                    style={{
-                      height: "100%",
-                      width: `${candidate.call_success_score * 100}%`,
-                      backgroundColor:
-                        candidate.call_success_score >= 0.7
-                          ? "var(--color-success)"
-                          : candidate.call_success_score >= 0.4
-                          ? "var(--color-warning)"
-                          : "var(--color-error)",
-                      borderRadius: "2px",
-                    }}
-                  />
-                </div>
-                <span style={{ fontSize: "0.6875rem", color: "var(--color-text-muted)" }}>
-                  {Math.round(candidate.call_success_score * 100)}%
-                </span>
-              </div>
+                Available: {candidate.availability_details}
+              </p>
+            )}
+
+            {/* Call summary - show prominently */}
+            {candidate.call_summary && (
+              <p
+                style={{
+                  fontSize: "0.75rem",
+                  color: "var(--color-text-secondary)",
+                  marginTop: "0.5rem",
+                  lineHeight: 1.4,
+                  fontStyle: "italic",
+                }}
+              >
+                {candidate.call_summary}
+              </p>
             )}
           </div>
         )}
