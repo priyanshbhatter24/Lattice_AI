@@ -185,38 +185,101 @@ async def process_locations_streaming(
     await asyncio.gather(*tasks, return_exceptions=True)
 
 
-DEDUP_PROMPT = """Analyze these screenplay scene headers and identify which ones refer to the SAME physical location.
+# Pass 1: Name-based - merge obvious duplicates, flag ambiguous ones
+DEDUP_PASS1_PROMPT = """Analyze these screenplay scene headers to identify duplicates.
 
 Scene headers:
 {location_list}
 
-Group headers that refer to the SAME location. Consider:
-- "MARK'S DORM ROOM" and "MARK'S ROOM" = same location
-- "CAMERON AND TYLER'S DORM ROOM" and "TYLER AND CAMERON'S DORM ROOM" = same (name order swapped)
-- "PORCELLIAN CLUB" and "PORCELLIAN" = same (suffix dropped)
-- "FIRST DEPOSITION ROOM" vs "SECOND DEPOSITION ROOM" = DIFFERENT rooms
-- Generic names like "HALLWAY" or "BEDROOM" in different contexts might be different locations
+Do TWO things:
 
-Return JSON where keys are the canonical name and values are arrays of headers to merge:
+1. MERGE headers that CLEARLY refer to the same location based on names:
+   - "MARK'S DORM ROOM" and "MARK'S ROOM" = same (shortened)
+   - "CAMERON AND TYLER'S DORM ROOM" and "TYLER AND CAMERON'S DORM ROOM" = same (name order)
+   - "PORCELLIAN CLUB" and "PORCELLIAN" = same (suffix dropped)
+
+2. FLAG headers that are generic/ambiguous and MIGHT be the same location but need script context to decide:
+   - Generic names like "BEDROOM", "HALLWAY", "KITCHEN", "OFFICE", "CAR"
+   - Only flag if the same generic name appears multiple times
+
+Return JSON:
 {{
-  "canonical_header": ["header1", "header2"],
-  ...
+  "merge": {{
+    "canonical_header": ["header1", "header2"]
+  }},
+  "needs_context": ["INT. BEDROOM", "INT. HALLWAY"]
 }}
 
-Only include entries where there are duplicates to merge. Respond with valid JSON only."""
+Only include headers that have duplicates or need context review. Respond with valid JSON only."""
+
+
+# Pass 2: Context-based - decide on flagged ambiguous locations
+DEDUP_PASS2_PROMPT = """These screenplay locations have generic names. Look at the script context to determine if they're the SAME or DIFFERENT physical locations.
+
+{location_contexts}
+
+For each location name, decide based on:
+- Characters present (same characters = likely same place)
+- Setting details mentioned
+- Story continuity
+
+Return JSON with your decision for each:
+{{
+  "INT. BEDROOM": "same",
+  "INT. HALLWAY": "different"
+}}
+
+Respond with valid JSON only."""
+
+
+def _merge_locations(
+    locations: list[UniqueLocation],
+    header_to_canonical: dict[str, str],
+) -> list[UniqueLocation]:
+    """Merge locations based on header mapping."""
+    merged: dict[str, UniqueLocation] = {}
+
+    for loc in locations:
+        canonical = header_to_canonical.get(loc.scene_header, loc.scene_header)
+
+        if canonical in merged:
+            existing = merged[canonical]
+            existing.occurrences.extend(loc.occurrences)
+            existing.page_numbers = sorted(set(existing.page_numbers + loc.page_numbers))
+            if existing.time_of_day != loc.time_of_day and loc.time_of_day != "both":
+                existing.time_of_day = "both"
+        else:
+            merged[canonical] = UniqueLocation(
+                scene_header=canonical,
+                interior_exterior=loc.interior_exterior,
+                time_of_day=loc.time_of_day,
+                occurrences=loc.occurrences.copy(),
+                page_numbers=loc.page_numbers.copy(),
+            )
+
+    result = list(merged.values())
+    result.sort(key=lambda loc: loc.page_numbers[0] if loc.page_numbers else 0)
+    return result
 
 
 async def deduplicate_locations_with_llm(
     locations: list[UniqueLocation],
 ) -> list[UniqueLocation]:
     """
-    Use LLM to identify and merge duplicate locations with similar names.
+    Two-pass deduplication:
+    1. Name-based: merge obvious duplicates, flag ambiguous ones
+    2. Context-based: for flagged locations, look at script context to decide
     """
     if not locations:
         return locations
 
     headers = [loc.scene_header for loc in locations]
     location_list = "\n".join(f"- {h}" for h in headers)
+    header_to_loc = {loc.scene_header: loc for loc in locations}
+
+    # === PASS 1: Name-based ===
+    needs_context: list[str] = []
+    header_to_canonical: dict[str, str] = {}
 
     try:
         response = await client.chat.completions.create(
@@ -226,56 +289,92 @@ async def deduplicate_locations_with_llm(
                     "role": "system",
                     "content": "You identify duplicate screenplay locations. Respond only with valid JSON.",
                 },
-                {"role": "user", "content": DEDUP_PROMPT.format(location_list=location_list)},
+                {"role": "user", "content": DEDUP_PASS1_PROMPT.format(location_list=location_list)},
             ],
             response_format={"type": "json_object"},
             temperature=0.1,
         )
 
         content = response.choices[0].message.content
-        merge_groups = json.loads(content)
+        result = json.loads(content)
 
-        if not merge_groups:
-            return locations
-
-        # Build mapping from header -> canonical header
-        header_to_canonical: dict[str, str] = {}
+        # Process merges
+        merge_groups = result.get("merge", {})
         for canonical, duplicates in merge_groups.items():
             for dup in duplicates:
                 header_to_canonical[dup] = canonical
 
-        # Merge locations
-        merged: dict[str, UniqueLocation] = {}
-        for loc in locations:
-            canonical = header_to_canonical.get(loc.scene_header, loc.scene_header)
+        # Get flagged ambiguous locations
+        needs_context = result.get("needs_context", [])
 
-            if canonical in merged:
-                existing = merged[canonical]
-                existing.occurrences.extend(loc.occurrences)
-                existing.page_numbers = sorted(set(existing.page_numbers + loc.page_numbers))
-                if existing.time_of_day != loc.time_of_day and loc.time_of_day != "both":
-                    existing.time_of_day = "both"
-            else:
-                merged[canonical] = UniqueLocation(
-                    scene_header=canonical,
-                    interior_exterior=loc.interior_exterior,
-                    time_of_day=loc.time_of_day,
-                    occurrences=loc.occurrences.copy(),
-                    page_numbers=loc.page_numbers.copy(),
-                )
-
-        result = list(merged.values())
-        result.sort(key=lambda loc: loc.page_numbers[0] if loc.page_numbers else 0)
-
+        locations = _merge_locations(locations, header_to_canonical)
         logger.info(
-            "LLM deduplication complete",
-            original_count=len(locations),
-            merged_count=len(result),
-            merges=len(locations) - len(result),
+            "Pass 1 complete",
+            merged=len(header_to_canonical),
+            flagged_for_context=len(needs_context),
         )
 
-        return result
-
     except Exception as e:
-        logger.warning("LLM deduplication failed, using original locations", error=str(e))
-        return locations
+        logger.warning("Pass 1 deduplication failed", error=str(e))
+
+    # === PASS 2: Context-based for flagged locations ===
+    if needs_context:
+        # Find locations matching the flagged headers
+        flagged_groups: dict[str, list[UniqueLocation]] = {}
+        for loc in locations:
+            if loc.scene_header in needs_context:
+                base = loc.scene_header
+                if base not in flagged_groups:
+                    flagged_groups[base] = []
+                flagged_groups[base].append(loc)
+
+        # Only process if we found matching locations (should always match)
+        # and there are multiple with same header (otherwise nothing to merge)
+        groups_to_check = {k: v for k, v in flagged_groups.items() if len(v) > 1}
+
+        if groups_to_check:
+            try:
+                # Build context for each flagged location
+                context_parts = []
+                for header, locs in groups_to_check.items():
+                    context_parts.append(f"\n## {header}")
+                    for i, loc in enumerate(locs, 1):
+                        snippet = loc.occurrences[0].context[:300] if loc.occurrences else "No context"
+                        context_parts.append(f"Occurrence {i} (pages {loc.page_numbers}):\n{snippet}...")
+
+                location_contexts = "\n".join(context_parts)
+
+                response = await client.chat.completions.create(
+                    model=settings.openai_model,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": "You analyze screenplay context. Respond only with valid JSON.",
+                        },
+                        {"role": "user", "content": DEDUP_PASS2_PROMPT.format(location_contexts=location_contexts)},
+                    ],
+                    response_format={"type": "json_object"},
+                    temperature=0.1,
+                )
+
+                content = response.choices[0].message.content
+                decisions = json.loads(content)
+
+                # Merge locations decided as "same"
+                header_to_canonical = {}
+                for header, decision in decisions.items():
+                    if decision.lower() == "same" and header in groups_to_check:
+                        locs = groups_to_check[header]
+                        canonical = locs[0].scene_header
+                        for loc in locs[1:]:
+                            header_to_canonical[loc.scene_header] = canonical
+
+                if header_to_canonical:
+                    locations = _merge_locations(locations, header_to_canonical)
+                    logger.info("Pass 2 merged", count=len(header_to_canonical))
+
+            except Exception as e:
+                logger.warning("Pass 2 deduplication failed", error=str(e))
+
+    logger.info("Deduplication complete", final_count=len(locations))
+    return locations
