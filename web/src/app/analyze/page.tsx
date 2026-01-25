@@ -178,8 +178,8 @@ function AnalyzePageContent() {
             break;
           }
           case "location":
-            locationsRef.current = [...locationsRef.current, event.data];
-            setLocations((prev) => [...prev, event.data]);
+            locationsRef.current = [event.data, ...locationsRef.current];
+            setLocations((prev) => [event.data, ...prev]);
             break;
           case "progress":
             setProgress(event.data);
@@ -958,7 +958,7 @@ function LocationGrid({ locations, isAnimated = false }: { locations: LocationRe
           className={isAnimated ? "animate-fade-in" : ""}
           style={isAnimated ? { animationDelay: `${Math.min(index * 50, 500)}ms` } : undefined}
         >
-          <LocationCard location={loc} isNew={isAnimated && index === locations.length - 1} />
+          <LocationCard location={loc} isNew={isAnimated && index === 0} />
         </div>
       ))}
     </div>
