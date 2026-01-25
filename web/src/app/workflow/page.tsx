@@ -2371,16 +2371,19 @@ function VenueDiscoveryCard({
 }) {
   const [imageLoaded, setImageLoaded] = useState(false);
   const [imageError, setImageError] = useState(false);
+  const [hasAnimated, setHasAnimated] = useState(false);
   const hasPhoto = venue.photo_urls && venue.photo_urls.length > 0 && !imageError;
 
-  // Stagger animation delay based on index (capped at 500ms for performance)
-  const animationDelay = `${Math.min(index * 50, 500)}ms`;
+  // Only animate once when first rendered
+  useEffect(() => {
+    const timer = setTimeout(() => setHasAnimated(true), 500);
+    return () => clearTimeout(timer);
+  }, []);
 
   return (
     <div
-      className={`paper-card overflow-hidden rounded-lg cursor-pointer transition-all hover:scale-[1.02] animate-venue-pop ${isLatest ? "animate-glow" : ""}`}
+      className={`paper-card overflow-hidden rounded-lg cursor-pointer transition-all hover:scale-[1.02] ${!hasAnimated ? "animate-venue-pop" : ""} ${isLatest ? "animate-glow" : ""}`}
       style={{
-        animationDelay,
         borderColor: isLatest ? "var(--color-accent)" : undefined,
         height: "260px",
       }}
