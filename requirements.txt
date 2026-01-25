@@ -11,6 +11,9 @@ pydantic-settings>=2.6.0
 # ─── Database ─────────────────────────────────────────────
 supabase>=2.10.0
 
+# ─── Authentication ─────────────────────────────────────────
+PyJWT>=2.8.0
+
 # ─── AI / LLM ─────────────────────────────────────────────
 # Stage 1 + Stage 2: Google GenAI with Gemini 2.5 Flash
 google-genai>=1.0.0

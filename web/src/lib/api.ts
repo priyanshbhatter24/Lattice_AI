@@ -18,12 +18,36 @@ import type {
   GroundableScene,
   GroundingSSEEvent,
 } from "./types";
-
 // Backend API base URL - adjust for production
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 /**
- * Upload a screenplay PDF file.
+ * Get auth headers for API requests.
+ * Returns empty object if not authenticated or during SSR.
+ */
+async function getAuthHeaders(): Promise<HeadersInit> {
+  // Skip during SSR/SSG
+  if (typeof window === "undefined") {
+    return {};
+  }
+
+  try {
+    const { createClient } = await import("@/utils/supabase/client");
+    const supabase = createClient();
+    const { data } = await supabase.auth.getSession();
+    if (data.session?.access_token) {
+      return {
+        Authorization: `Bearer ${data.session.access_token}`,
+      };
+    }
+  } catch (e) {
+    console.warn("Failed to get auth token:", e);
+  }
+  return {};
+}
+
+/**
+ * Upload a screenplay PDF file to local storage (legacy method).
  * @returns Object with the file path for analysis
  */
 export async function uploadScript(file: File): Promise<{ path: string }> {
@@ -42,6 +66,53 @@ export async function uploadScript(file: File): Promise<{ path: string }> {
 
   const data = await response.json();
   return { path: data.path };
+}
+
+/**
+ * Upload a screenplay PDF file to Supabase Storage.
+ * Files are stored in user-specific folders: scripts/{userId}/{timestamp}_{filename}
+ * @returns Object with the storage path
+ */
+export async function uploadScriptToStorage(
+  file: File,
+  userId: string
+): Promise<{ path: string }> {
+  const { createClient } = await import("@/utils/supabase/client");
+  const supabase = createClient();
+  const path = `${userId}/${Date.now()}_${file.name}`;
+
+  const { error } = await supabase.storage
+    .from("scripts")
+    .upload(path, file, {
+      contentType: "application/pdf",
+      upsert: false,
+    });
+
+  if (error) {
+    console.error("Storage upload error:", error);
+    throw new Error(error.message || "Failed to upload script");
+  }
+
+  return { path };
+}
+
+/**
+ * Get a signed URL for a script in Supabase Storage.
+ * @param path - Storage path (e.g., "{userId}/{timestamp}_{filename}")
+ * @returns Signed URL valid for 1 hour
+ */
+export async function getScriptUrl(path: string): Promise<string> {
+  const { createClient } = await import("@/utils/supabase/client");
+  const supabase = createClient();
+  const { data, error } = await supabase.storage
+    .from("scripts")
+    .createSignedUrl(path, 3600); // 1 hour expiry
+
+  if (error || !data?.signedUrl) {
+    throw new Error("Failed to get script URL");
+  }
+
+  return data.signedUrl;
 }
 
 /**
@@ -194,25 +265,32 @@ export type { AvailableScript };
 // ══════════════════════════════════════════════════════════
 
 // ══════════════════════════════════════════════════════════
-// Project API
+// Project API (requires authentication)
 // ══════════════════════════════════════════════════════════
 
 export async function listProjects(limit = 50): Promise<Project[]> {
-  const response = await fetch(`${API_BASE}/api/projects?limit=${limit}`);
+  const authHeaders = await getAuthHeaders();
+  const response = await fetch(`${API_BASE}/api/projects?limit=${limit}`, {
+    headers: authHeaders,
+  });
   if (!response.ok) throw new Error("Failed to fetch projects");
   return response.json();
 }
 
 export async function getProject(projectId: string): Promise<Project> {
-  const response = await fetch(`${API_BASE}/api/projects/${projectId}`);
+  const authHeaders = await getAuthHeaders();
+  const response = await fetch(`${API_BASE}/api/projects/${projectId}`, {
+    headers: authHeaders,
+  });
   if (!response.ok) throw new Error("Project not found");
   return response.json();
 }
 
 export async function createProject(data: CreateProjectRequest): Promise<Project> {
+  const authHeaders = await getAuthHeaders();
   const response = await fetch(`${API_BASE}/api/projects`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...authHeaders },
     body: JSON.stringify(data),
   });
   if (!response.ok) {
@@ -226,17 +304,30 @@ export async function updateProject(
   projectId: string,
   updates: Partial<Project>
 ): Promise<Project> {
+  const authHeaders = await getAuthHeaders();
   const response = await fetch(`${API_BASE}/api/projects/${projectId}`, {
     method: "PATCH",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...authHeaders },
     body: JSON.stringify(updates),
   });
   if (!response.ok) throw new Error("Failed to update project");
   return response.json();
 }
 
+export async function deleteProject(projectId: string): Promise<void> {
+  const authHeaders = await getAuthHeaders();
+  const response = await fetch(`${API_BASE}/api/projects/${projectId}`, {
+    method: "DELETE",
+    headers: authHeaders,
+  });
+  if (!response.ok) throw new Error("Failed to delete project");
+}
+
 export async function listProjectScenes(projectId: string): Promise<Scene[]> {
-  const response = await fetch(`${API_BASE}/api/projects/${projectId}/scenes`);
+  const authHeaders = await getAuthHeaders();
+  const response = await fetch(`${API_BASE}/api/projects/${projectId}/scenes`, {
+    headers: authHeaders,
+  });
   if (!response.ok) throw new Error("Failed to fetch scenes");
   return response.json();
 }

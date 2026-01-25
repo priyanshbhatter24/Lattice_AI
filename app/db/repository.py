@@ -74,9 +74,26 @@ class ProjectRepository(BaseRepository):
         return self.update(project_id, status=status)
 
     def list_all(self, limit: int = 100) -> list[dict]:
-        """List all projects."""
+        """List all projects (admin only - no user filtering)."""
         result = self._table().select("*").order("created_at", desc=True).limit(limit).execute()
         return result.data
+
+    def list_by_user(self, user_id: str, limit: int = 100) -> list[dict]:
+        """List all projects for a specific user."""
+        result = (
+            self._table()
+            .select("*")
+            .eq("user_id", user_id)
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        return result.data
+
+    def delete(self, project_id: str | UUID) -> None:
+        """Delete a project by ID (cascades to scenes, candidates, bookings)."""
+        self._table().delete().eq("id", str(project_id)).execute()
+        logger.info("Deleted project", project_id=str(project_id))
 
 
 class SceneRepository(BaseRepository):

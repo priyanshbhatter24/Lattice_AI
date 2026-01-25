@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Source_Serif_4, IBM_Plex_Sans, IBM_Plex_Mono } from "next/font/google";
 import "./globals.css";
+import { AuthProvider } from "@/lib/auth";
 
 const sourceSerif = Source_Serif_4({
   variable: "--font-display",
@@ -35,7 +36,7 @@ export default function RootLayout({
       <body
         className={`${sourceSerif.variable} ${ibmPlexSans.variable} ${ibmPlexMono.variable} antialiased`}
       >
-        {children}
+        <AuthProvider>{children}</AuthProvider>
       </body>
     </html>
   );

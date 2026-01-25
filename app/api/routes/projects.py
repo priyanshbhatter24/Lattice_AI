@@ -2,14 +2,16 @@
 API routes for project management.
 
 Provides endpoints for creating and managing film projects.
+All endpoints require authentication.
 """
 
 from typing import Any
 
 import structlog
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from app.api.middleware.auth import get_current_user
 from app.db.repository import ProjectRepository, SceneRepository
 
 logger = structlog.get_logger()
@@ -47,27 +49,40 @@ class CreateSceneRequest(BaseModel):
 
 
 @router.get("")
-async def list_projects(limit: int = 50) -> list[dict[str, Any]]:
-    """List all projects."""
+async def list_projects(
+    limit: int = 50,
+    user_id: str = Depends(get_current_user),
+) -> list[dict[str, Any]]:
+    """List all projects for the authenticated user."""
     repo = ProjectRepository()
-    return repo.list_all(limit=limit)
+    return repo.list_by_user(user_id, limit=limit)
 
 
 @router.get("/{project_id}")
-async def get_project(project_id: str) -> dict[str, Any]:
-    """Get a single project by ID."""
+async def get_project(
+    project_id: str,
+    user_id: str = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Get a single project by ID (must be owned by authenticated user)."""
     repo = ProjectRepository()
     project = repo.get(project_id)
 
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
+    # Verify ownership
+    if project.get("user_id") != user_id:
+        raise HTTPException(status_code=404, detail="Project not found")
+
     return project
 
 
 @router.post("")
-async def create_project(request: CreateProjectRequest) -> dict[str, Any]:
-    """Create a new project."""
+async def create_project(
+    request: CreateProjectRequest,
+    user_id: str = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Create a new project for the authenticated user."""
     repo = ProjectRepository()
 
     project = repo.create(
@@ -77,20 +92,29 @@ async def create_project(request: CreateProjectRequest) -> dict[str, Any]:
         crew_size=request.crew_size,
         filming_start_date=request.filming_start_date,
         filming_end_date=request.filming_end_date,
+        user_id=user_id,
     )
 
-    logger.info("Created project", project_id=project["id"], name=request.name)
+    logger.info("Created project", project_id=project["id"], name=request.name, user_id=user_id)
 
     return project
 
 
 @router.patch("/{project_id}")
-async def update_project(project_id: str, updates: dict[str, Any]) -> dict[str, Any]:
-    """Update a project."""
+async def update_project(
+    project_id: str,
+    updates: dict[str, Any],
+    user_id: str = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Update a project (must be owned by authenticated user)."""
     repo = ProjectRepository()
 
     project = repo.get(project_id)
     if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Verify ownership
+    if project.get("user_id") != user_id:
         raise HTTPException(status_code=404, detail="Project not found")
 
     # Filter allowed fields
@@ -115,9 +139,35 @@ async def update_project(project_id: str, updates: dict[str, Any]) -> dict[str, 
     return result
 
 
+@router.delete("/{project_id}")
+async def delete_project(
+    project_id: str,
+    user_id: str = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Delete a project (must be owned by authenticated user)."""
+    repo = ProjectRepository()
+
+    project = repo.get(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Verify ownership
+    if project.get("user_id") != user_id:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    repo.delete(project_id)
+
+    logger.info("Deleted project", project_id=project_id, user_id=user_id)
+
+    return {"success": True, "deleted_id": project_id}
+
+
 @router.get("/{project_id}/scenes")
-async def list_project_scenes(project_id: str) -> list[dict[str, Any]]:
-    """List all scenes for a project."""
+async def list_project_scenes(
+    project_id: str,
+    user_id: str = Depends(get_current_user),
+) -> list[dict[str, Any]]:
+    """List all scenes for a project (must be owned by authenticated user)."""
     project_repo = ProjectRepository()
     scene_repo = SceneRepository()
 
@@ -125,13 +175,21 @@ async def list_project_scenes(project_id: str) -> list[dict[str, Any]]:
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
+    # Verify ownership
+    if project.get("user_id") != user_id:
+        raise HTTPException(status_code=404, detail="Project not found")
+
     return scene_repo.list_by_project(project_id)
 
 
 @router.post("/{project_id}/scenes")
-async def create_scene(project_id: str, request: CreateSceneRequest) -> dict[str, Any]:
+async def create_scene(
+    project_id: str,
+    request: CreateSceneRequest,
+    user_id: str = Depends(get_current_user),
+) -> dict[str, Any]:
     """
-    Create a test scene for a project.
+    Create a test scene for a project (must be owned by authenticated user).
 
     This is primarily for testing - normally scenes come from Stage 1 script analysis.
     """
@@ -142,6 +200,10 @@ async def create_scene(project_id: str, request: CreateSceneRequest) -> dict[str
 
     project = project_repo.get(project_id)
     if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Verify ownership
+    if project.get("user_id") != user_id:
         raise HTTPException(status_code=404, detail="Project not found")
 
     scene_id = str(uuid4())

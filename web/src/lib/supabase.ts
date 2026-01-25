@@ -3,43 +3,45 @@
  * Subscribes to location_candidates table for live call status.
  */
 
-import { createClient, type SupabaseClient, type RealtimeChannel } from "@supabase/supabase-js";
+import { type RealtimeChannel, type SupabaseClient } from "@supabase/supabase-js";
 import type { LocationCandidate } from "./types";
 
-// Supabase configuration - lazy loaded
-let supabaseInstance: SupabaseClient | null = null;
-
-function getSupabaseUrl(): string {
-  return process.env.NEXT_PUBLIC_SUPABASE_URL || "";
-}
-
-function getSupabaseAnonKey(): string {
-  return process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
-}
+// Lazy-loaded client singleton
+let supabaseClient: SupabaseClient | null = null;
 
 // Check if Supabase is configured
 export function isSupabaseConfigured(): boolean {
-  return Boolean(getSupabaseUrl() && getSupabaseAnonKey());
+  return Boolean(
+    process.env.NEXT_PUBLIC_SUPABASE_URL &&
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  );
 }
 
-// Get or create Supabase client (lazy singleton)
+// Get Supabase client (lazy load to avoid SSG issues)
 function getSupabase(): SupabaseClient | null {
+  if (typeof window === "undefined") {
+    // Don't create client during SSR/SSG
+    return null;
+  }
+
   if (!isSupabaseConfigured()) {
     return null;
   }
 
-  if (!supabaseInstance) {
-    supabaseInstance = createClient(getSupabaseUrl(), getSupabaseAnonKey());
+  if (!supabaseClient) {
+    // Dynamically import to avoid SSG issues
+    const { createClient } = require("@/utils/supabase/client");
+    supabaseClient = createClient();
   }
 
-  return supabaseInstance;
+  return supabaseClient;
 }
 
 // Export for direct access if needed
 export const supabase = {
   get client() {
     return getSupabase();
-  }
+  },
 };
 
 /**
