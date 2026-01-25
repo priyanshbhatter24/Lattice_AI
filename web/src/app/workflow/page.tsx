@@ -71,6 +71,16 @@ export default function Home() {
   const [thinkingLog, setThinkingLog] = useState<ThinkingEntry[]>([]);
   const [currentThinking, setCurrentThinking] = useState<string | null>(null);
 
+  // Preview venue data from "evaluating" thinking events (before decision)
+  interface PreviewVenue {
+    venue_name: string;
+    photo_url?: string;
+    match_score?: number;
+    formatted_address?: string;
+    google_rating?: number;
+  }
+  const [previewVenue, setPreviewVenue] = useState<PreviewVenue | null>(null);
+
   useEffect(() => {
     getAvailableScripts().then(setAvailableScripts).catch(console.error);
   }, []);
@@ -125,6 +135,7 @@ export default function Home() {
     setLatestVenueId(null);
     setLatestRejectedId(null);
     setConsideringVenue(null);
+    setPreviewVenue(null);
     setIsRejecting(false);
     setRejectingReasons([]);
     setThinkingLog([]);
@@ -204,6 +215,17 @@ export default function Home() {
                 detail: event.data.detail,
                 timestamp: Date.now(),
               }, ...prev].slice(0, 20));
+
+              // If this is an "evaluating" event with venue data, show preview card
+              if (event.data.action === "evaluating" && event.data.venue_name) {
+                setPreviewVenue({
+                  venue_name: event.data.venue_name,
+                  photo_url: event.data.photo_url,
+                  match_score: event.data.match_score,
+                  formatted_address: event.data.formatted_address,
+                  google_rating: event.data.google_rating,
+                });
+              }
               break;
             case "candidate":
               // Log photo info for debugging
@@ -218,7 +240,8 @@ export default function Home() {
               // Map the DB scene_id back to the original analysis scene_id
               const originalSceneId = dbIdToOriginalId.get(event.data.scene_id) || event.data.scene_id;
 
-              // Show venue in "considering" state briefly (accepted)
+              // Clear preview and show venue in "considering" state briefly (accepted)
+              setPreviewVenue(null);
               setConsideringVenue(candidate);
               setIsRejecting(false);
               setRejectingReasons([]);
@@ -259,7 +282,8 @@ export default function Home() {
                 visual_score: rejectedCandidate.visual_vibe_score,
               });
 
-              // Show in considering state with rejection indication
+              // Clear preview and show in considering state with rejection indication
+              setPreviewVenue(null);
               setConsideringVenue(rejectedCandidate);
               setIsRejecting(true);
               setRejectingReasons(rejectionReasons);
@@ -385,7 +409,8 @@ export default function Home() {
             break;
           }
           case "location":
-            setLocations((prev) => [...prev, event.data]);
+            // Add new locations to the beginning so newest appears at top
+            setLocations((prev) => [event.data, ...prev]);
             break;
           case "progress":
             setProgress(event.data);
@@ -1066,13 +1091,16 @@ export default function Home() {
             {/* Center: Decision Card Stage */}
             <div className="flex justify-center mb-6">
               <div className="relative" style={{ width: "100%", maxWidth: "400px", height: "380px" }}>
-                {/* Decision card */}
+                {/* Decision card - show when we have full candidate data */}
                 {consideringVenue ? (
                   <SwipeDecisionCard
                     venue={consideringVenue}
                     isRejecting={isRejecting}
                     rejectReason={rejectingReasons[0]}
                   />
+                ) : previewVenue ? (
+                  /* Preview card - show while evaluating (before decision) */
+                  <PreviewCard preview={previewVenue} />
                 ) : (
                   /* Waiting for next card */
                   <div
@@ -2578,6 +2606,121 @@ function SwipeDecisionCard({
             )}
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+// Preview card - shows venue image while AI is evaluating (before decision)
+function PreviewCard({
+  preview,
+}: {
+  preview: {
+    venue_name: string;
+    photo_url?: string;
+    match_score?: number;
+    formatted_address?: string;
+    google_rating?: number;
+  };
+}) {
+  const [imageLoaded, setImageLoaded] = useState(false);
+  const [imageError, setImageError] = useState(false);
+  const hasPhoto = preview.photo_url && !imageError;
+
+  return (
+    <div
+      className="absolute inset-0 rounded-xl overflow-hidden animate-card-enter"
+      style={{
+        background: "var(--color-bg-card)",
+        boxShadow: "0 10px 40px rgba(44, 36, 22, 0.15)",
+        border: "2px solid var(--color-border)",
+      }}
+    >
+      {/* Image area */}
+      <div className="relative h-52 overflow-hidden" style={{ background: "var(--color-bg-muted)" }}>
+        {hasPhoto ? (
+          <>
+            {!imageLoaded && <div className="absolute inset-0 animate-shimmer" />}
+            <img
+              src={preview.photo_url}
+              alt={preview.venue_name}
+              className={`w-full h-full object-cover transition-opacity duration-300 ${imageLoaded ? "opacity-100" : "opacity-0"}`}
+              onLoad={() => setImageLoaded(true)}
+              onError={() => setImageError(true)}
+            />
+          </>
+        ) : (
+          <div className="w-full h-full flex items-center justify-center">
+            <svg className="h-16 w-16 animate-pulse" style={{ color: "var(--color-text-subtle)" }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v12a1.5 1.5 0 001.5 1.5zm10.5-11.25h.008v.008h-.008V8.25zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z" />
+            </svg>
+          </div>
+        )}
+
+        {/* Match score badge (if available) */}
+        {preview.match_score !== undefined && (
+          <div
+            className="absolute top-3 right-3 px-3 py-1.5 rounded-full text-sm font-bold"
+            style={{
+              background: preview.match_score >= 0.7 ? "var(--color-success)" : "var(--color-warning)",
+              color: "white",
+            }}
+          >
+            {Math.round(preview.match_score * 100)}%
+          </div>
+        )}
+
+        {/* Evaluating indicator with scanning effect */}
+        <div className="absolute top-3 left-3 px-3 py-1.5 rounded-full text-xs font-semibold flex items-center gap-2" style={{ background: "rgba(0,0,0,0.7)", color: "white" }}>
+          <div className="relative h-2 w-2">
+            <div className="absolute inset-0 rounded-full animate-ping" style={{ background: "var(--color-warning)" }} />
+            <div className="absolute inset-0 rounded-full" style={{ background: "var(--color-warning)" }} />
+          </div>
+          Analyzing...
+        </div>
+
+        {/* Scanning overlay effect */}
+        <div
+          className="absolute inset-0 pointer-events-none"
+          style={{
+            background: "linear-gradient(180deg, transparent 0%, transparent 45%, rgba(184, 134, 11, 0.15) 50%, transparent 55%, transparent 100%)",
+            backgroundSize: "100% 200%",
+            animation: "scan 2s ease-in-out infinite",
+          }}
+        />
+      </div>
+
+      {/* Info area */}
+      <div className="p-4">
+        <h3
+          className="text-lg font-semibold truncate mb-1"
+          style={{ fontFamily: "var(--font-display)", color: "var(--color-text)" }}
+        >
+          {preview.venue_name}
+        </h3>
+        {preview.formatted_address && (
+          <p className="text-sm truncate mb-3" style={{ color: "var(--color-text-muted)" }}>
+            {preview.formatted_address}
+          </p>
+        )}
+
+        <div className="flex items-center gap-4 text-sm">
+          {preview.google_rating && (
+            <span className="flex items-center gap-1" style={{ color: "var(--color-text-secondary)" }}>
+              <svg className="h-4 w-4" fill="var(--color-warning)" viewBox="0 0 24 24">
+                <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+              </svg>
+              {preview.google_rating.toFixed(1)}
+            </span>
+          )}
+          <span className="flex items-center gap-1.5 animate-pulse" style={{ color: "var(--color-text-muted)" }}>
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+              <path strokeLinecap="round" strokeLinejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+            </svg>
+            Checking visuals...
+          </span>
+        </div>
       </div>
     </div>
   );

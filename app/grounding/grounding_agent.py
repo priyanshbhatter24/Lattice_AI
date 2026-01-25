@@ -181,13 +181,21 @@ class GroundingAgent:
 
         The prompt instructs the model to find locations and return structured data.
         """
+        # Build script context section if available
+        script_context = ""
+        if requirement.script_excerpt:
+            script_context = f"""
+**Scene Context from Script:**
+{requirement.script_excerpt}
+"""
+
         return f"""You are a professional location scout for film productions.
 Find real-world locations that match the following requirements:
 
 **Scene:** {requirement.scene_header}
 **Vibe:** {requirement.vibe.primary.value} (descriptors: {', '.join(requirement.vibe.descriptors)})
 **Search Query:** {query}
-
+{script_context}
 **Physical Requirements:**
 - Interior/Exterior: {requirement.constraints.interior_exterior}
 - Time of Day: {requirement.constraints.time_of_day}
@@ -207,7 +215,7 @@ For each location found, provide:
 - Google Place ID (important for fetching photos)
 - Phone number (if available)
 - Website (if available)
-- Why it matches the requirements (brief explanation)
+- Why it matches the scene requirements (reference the script context when explaining how this venue fits the scene's mood, action, or narrative)
 - Rating and review count
 - Any potential concerns for filming
 
@@ -224,7 +232,7 @@ Format your response as a JSON array of locations with the following structure:
     "longitude": -118.2437,
     "google_rating": 4.5,
     "google_review_count": 127,
-    "match_reasoning": "Industrial warehouse with 25ft ceilings, brick walls match the gritty aesthetic",
+    "match_reasoning": "The raw industrial space with exposed brick and high ceilings creates the tense atmosphere needed for the confrontation scene. The loading dock area could serve as the entrance point described in the script.",
     "potential_concerns": ["Limited parking", "Noise restrictions after 10pm"]
   }}
 ]
@@ -875,6 +883,7 @@ Rules for scoring:
 
         for i, candidate in enumerate(candidates):
             # Emit status for each venue being analyzed with varied language
+            # Include photo_url so frontend can show image during evaluation
             if status_callback:
                 try:
                     phrase = eval_phrases[i % len(eval_phrases)]
@@ -883,6 +892,10 @@ Rules for scoring:
                         "message": f"{phrase} {candidate.venue_name}...",
                         "detail": f"Does this match the {vibe.primary.value} vibe we need?",
                         "venue_name": candidate.venue_name,
+                        "photo_url": candidate.photo_urls[0] if candidate.photo_urls else None,
+                        "match_score": candidate.match_score,
+                        "formatted_address": candidate.formatted_address,
+                        "google_rating": candidate.google_rating,
                     })
                 except Exception:
                     pass

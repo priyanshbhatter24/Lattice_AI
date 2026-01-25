@@ -582,3 +582,16 @@ body::before {
 .animate-ticker {
   animation: ticker-slide 0.2s ease-out forwards;
 }
+
+/* Scanning effect for preview card */
+@keyframes scan {
+  0% {
+    background-position: 0% 0%;
+  }
+  50% {
+    background-position: 0% 100%;
+  }
+  100% {
+    background-position: 0% 0%;
+  }
+}

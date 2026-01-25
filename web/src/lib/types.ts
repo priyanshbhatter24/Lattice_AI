@@ -360,6 +360,11 @@ export interface GroundingThinkingEvent {
   message: string;
   detail?: string;
   venue_name?: string;
+  // Additional data for evaluating action - allows showing preview card
+  photo_url?: string;
+  match_score?: number;
+  formatted_address?: string;
+  google_rating?: number;
 }
 
 export interface GroundingSceneStartEvent {
