@@ -329,11 +329,17 @@ export async function rejectLocation(
 // Vapi Calls API
 // ══════════════════════════════════════════════════════════
 
-export async function triggerCall(candidateId: string): Promise<CallResponse> {
+export async function triggerCall(
+  candidateId: string,
+  overridePhone?: string
+): Promise<CallResponse> {
   const response = await fetch(`${API_BASE}/api/calls/trigger`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ candidate_id: candidateId }),
+    body: JSON.stringify({
+      candidate_id: candidateId,
+      override_phone_number: overridePhone,
+    }),
   });
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: "Failed to trigger call" }));

@@ -11,6 +11,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from app.db.repository import LocationCandidateRepository, ProjectRepository, SceneRepository
+from app.grounding.models import LocationCandidate
 from app.vapi.call_context import CallContext, ProjectContext
 from app.vapi.service import get_vapi_service
 
@@ -28,6 +29,7 @@ class TriggerCallRequest(BaseModel):
     """Request to trigger a single call."""
 
     candidate_id: str
+    override_phone_number: str | None = None  # For testing - overrides candidate phone
 
 
 class TriggerBatchRequest(BaseModel):
@@ -86,24 +88,29 @@ async def trigger_call(request: TriggerCallRequest) -> CallResponse:
     if not project_data:
         raise HTTPException(status_code=404, detail="Project not found")
 
+    # Build LocationCandidate from database dict
+    candidate = LocationCandidate(**candidate_data)
+
+    # Override phone for testing if provided
+    if request.override_phone_number:
+        candidate.phone_number = request.override_phone_number
+
     # Build project context
     project_context = ProjectContext(
+        project_id=project_data["id"],
         production_company=project_data.get("company_name", "Production Company"),
         project_name=project_data.get("name", "Film Project"),
         filming_dates=_format_filming_dates(project_data),
         duration_description=f"{scene_data.get('estimated_shoot_hours', 12)} hours" if scene_data else "12 hours",
         crew_size=project_data.get("crew_size", 20),
-        scene_description=scene_data.get("scene_header", "") if scene_data else "",
         special_requirements=_extract_special_requirements(scene_data) if scene_data else [],
     )
 
     # Build call context
     call_context = CallContext(
-        candidate_id=candidate_data["id"],
-        venue_name=candidate_data["venue_name"],
-        phone_number=candidate_data["phone_number"],
-        venue_address=candidate_data.get("formatted_address", ""),
-        project_context=project_context,
+        candidate=candidate,
+        project=project_context,
+        scene_description=scene_data.get("scene_header", "") if scene_data else "",
     )
 
     # Trigger call
@@ -166,23 +173,24 @@ async def trigger_batch_calls(request: TriggerBatchRequest) -> BatchResponse:
         if not project_data:
             continue
 
+        # Build LocationCandidate from database dict
+        candidate = LocationCandidate(**candidate_data)
+
         # Build contexts
         project_context = ProjectContext(
+            project_id=project_data["id"],
             production_company=project_data.get("company_name", "Production Company"),
             project_name=project_data.get("name", "Film Project"),
             filming_dates=_format_filming_dates(project_data),
             duration_description=f"{scene_data.get('estimated_shoot_hours', 12)} hours" if scene_data else "12 hours",
             crew_size=project_data.get("crew_size", 20),
-            scene_description=scene_data.get("scene_header", "") if scene_data else "",
             special_requirements=_extract_special_requirements(scene_data) if scene_data else [],
         )
 
         call_context = CallContext(
-            candidate_id=candidate_data["id"],
-            venue_name=candidate_data["venue_name"],
-            phone_number=candidate_data["phone_number"],
-            venue_address=candidate_data.get("formatted_address", ""),
-            project_context=project_context,
+            candidate=candidate,
+            project=project_context,
+            scene_description=scene_data.get("scene_header", "") if scene_data else "",
         )
         contexts.append(call_context)
 
