@@ -234,3 +234,95 @@ body::before {
   height: 1px;
   background: linear-gradient(90deg, transparent, var(--color-border), transparent);
 }
+
+/* ══════════════════════════════════════════════════════════
+   Stage 3: Vapi Calling Styles
+   ══════════════════════════════════════════════════════════ */
+
+/* Call Status Indicators */
+.call-status-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+}
+
+.call-status-dot.pulse {
+  animation: callPulse 1.5s ease-in-out infinite;
+}
+
+@keyframes callPulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.2); opacity: 0.7; }
+}
+
+/* Availability Badge */
+.availability-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.375rem 0.75rem;
+  border-radius: 4px;
+  font-weight: 600;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.availability-badge.available {
+  background: var(--color-success-light);
+  color: var(--color-success);
+  border: 1px solid rgba(74, 124, 89, 0.3);
+}
+
+.availability-badge.unavailable {
+  background: rgba(155, 59, 59, 0.1);
+  color: var(--color-error);
+  border: 1px solid rgba(155, 59, 59, 0.3);
+}
+
+/* Red Flags Warning */
+.red-flags {
+  background: rgba(155, 59, 59, 0.08);
+  border: 1px solid rgba(155, 59, 59, 0.2);
+  border-radius: 6px;
+  padding: 0.75rem;
+}
+
+/* Time Slot Selector */
+.time-slot-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+  gap: 0.5rem;
+}
+
+.time-slot {
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background: var(--color-bg-elevated);
+  cursor: pointer;
+  text-align: center;
+  font-size: 0.8125rem;
+  transition: all 0.15s ease;
+}
+
+.time-slot:hover {
+  border-color: var(--color-accent);
+  background: var(--color-accent-light);
+}
+
+.time-slot.selected {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+  color: var(--color-bg-elevated);
+}
+
+.time-slot.unavailable {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Paper card border radius */
+.paper-card {
+  border-radius: 6px;
+}
