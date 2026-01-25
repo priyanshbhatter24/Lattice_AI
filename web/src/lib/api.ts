@@ -1,5 +1,5 @@
 /**
- * API client for the Location Scout backend.
+ * API client for the Scout backend.
  * Handles script upload, analysis with SSE streaming, and script listing.
  */
 

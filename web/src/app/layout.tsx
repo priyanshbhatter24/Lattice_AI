@@ -22,8 +22,8 @@ const ibmPlexMono = IBM_Plex_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Location Scout",
-  description: "AI-powered location breakdown for film production",
+  title: "Scout",
+  description: "AI-powered location scouting for film production",
 };
 
 export default function RootLayout({

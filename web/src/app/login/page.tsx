@@ -59,7 +59,7 @@ export default function LoginPage() {
               marginBottom: "0.5rem",
             }}
           >
-            Location Scout
+            Scout
           </h1>
           <p
             style={{

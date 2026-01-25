@@ -1,5 +1,5 @@
 /**
- * TypeScript types for the Location Scout frontend.
+ * TypeScript types for the Scout frontend.
  * These types match the backend API response formats.
  */
 
