@@ -86,6 +86,11 @@ class SceneRepository(BaseRepository):
 
     def create(self, requirement: LocationRequirement) -> dict:
         """Create a scene from a LocationRequirement."""
+        # Include location_description and scouting_notes in vibe JSONB for persistence
+        vibe_data = requirement.vibe.model_dump()
+        vibe_data["location_description"] = getattr(requirement, "location_description", "")
+        vibe_data["scouting_notes"] = getattr(requirement, "scouting_notes", "")
+
         data = {
             "id": requirement.id,
             "project_id": requirement.project_id,
@@ -93,7 +98,7 @@ class SceneRepository(BaseRepository):
             "scene_header": requirement.scene_header,
             "page_numbers": requirement.page_numbers,
             "script_excerpt": requirement.script_excerpt,
-            "vibe": requirement.vibe.model_dump(),
+            "vibe": vibe_data,
             "constraints": requirement.constraints.model_dump(),
             "estimated_shoot_hours": requirement.estimated_shoot_hours,
             "priority": requirement.priority,
@@ -105,22 +110,26 @@ class SceneRepository(BaseRepository):
 
     def create_many(self, requirements: list[LocationRequirement]) -> list[dict]:
         """Batch create scenes from LocationRequirements."""
-        data = [
-            {
+        data = []
+        for req in requirements:
+            # Include location_description and scouting_notes in vibe JSONB for persistence
+            vibe_data = req.vibe.model_dump()
+            vibe_data["location_description"] = getattr(req, "location_description", "")
+            vibe_data["scouting_notes"] = getattr(req, "scouting_notes", "")
+
+            data.append({
                 "id": req.id,
                 "project_id": req.project_id,
                 "scene_number": req.scene_number,
                 "scene_header": req.scene_header,
                 "page_numbers": req.page_numbers,
                 "script_excerpt": req.script_excerpt,
-                "vibe": req.vibe.model_dump(),
+                "vibe": vibe_data,
                 "constraints": req.constraints.model_dump(),
                 "estimated_shoot_hours": req.estimated_shoot_hours,
                 "priority": req.priority,
                 "status": "pending",
-            }
-            for req in requirements
-        ]
+            })
         result = self._table().insert(data).execute()
         logger.info("Created scenes", count=len(result.data))
         return result.data

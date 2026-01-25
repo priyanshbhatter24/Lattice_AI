@@ -120,10 +120,27 @@ async def analyze_script(
                 "data": json.dumps({"message": "Identifying scene locations..."}),
             }
 
+            # Debug: Log first few pages for analysis
+            for page_num, page_text in pages[:3]:
+                lines = page_text.split('\n')[:10]
+                print(f"[ANALYZE] Page {page_num} preview (first 10 lines):")
+                for line in lines:
+                    if line.strip():
+                        print(f"  {line[:100]}")
+
             locations = extract_unique_locations(pages)
             initial_count = len(locations)
             print(f"[ANALYZE] Found {initial_count} locations")
             logger.info("Locations identified", count=initial_count)
+
+            # Debug: If no locations found, log more details
+            if initial_count == 0:
+                print("[ANALYZE] WARNING: No locations found!")
+                # Check if there are any INT/EXT patterns in the text
+                full_text = "\n".join(text for _, text in pages)
+                import re
+                int_ext_matches = re.findall(r'(INT|EXT|INTERIOR|EXTERIOR)[.\s]', full_text, re.IGNORECASE)
+                print(f"[ANALYZE] Found {len(int_ext_matches)} INT/EXT patterns in text: {int_ext_matches[:10]}")
 
             print(f"[ANALYZE] Yielding dedup status...")
             yield {

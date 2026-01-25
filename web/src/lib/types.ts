@@ -47,12 +47,16 @@ export interface AnalysisProgress {
 }
 
 // SSE event types from /api/scripts/analyze
-export type SSEEventType = "status" | "location" | "progress" | "complete" | "error";
+export type SSEEventType = "status" | "location" | "progress" | "complete" | "error" | "phase";
 
 export interface StatusEventData {
   message: string;
   pages?: number;
   total?: number;
+}
+
+export interface PhaseEventData {
+  phase: string;
 }
 
 export interface LocationEventData extends LocationRequirement {}
@@ -79,7 +83,8 @@ export type SSEEvent =
   | { type: "location"; data: LocationEventData }
   | { type: "progress"; data: ProgressEventData }
   | { type: "complete"; data: CompleteEventData }
-  | { type: "error"; data: ErrorEventData };
+  | { type: "error"; data: ErrorEventData }
+  | { type: "phase"; data: PhaseEventData };
 
 // Available script for selection
 export interface AvailableScript {

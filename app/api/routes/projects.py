@@ -128,6 +128,113 @@ async def list_project_scenes(project_id: str) -> list[dict[str, Any]]:
     return scene_repo.list_by_project(project_id)
 
 
+class BulkSaveLocationRequest(BaseModel):
+    """Request to bulk save analyzed locations to a project."""
+
+    locations: list[dict[str, Any]]
+
+
+# Use a distinct path pattern to avoid routing conflicts with /{project_id}/scenes
+@router.post("/{project_id}/bulk-scenes")
+async def bulk_save_scenes(project_id: str, request: BulkSaveLocationRequest) -> dict[str, Any]:
+    """
+    Bulk save analyzed locations (from Stage 1) as scenes to a project.
+
+    This endpoint takes the LocationRequirement objects from script analysis
+    and saves them as scenes in the database for Stage 2 grounding.
+    """
+    from uuid import uuid4
+
+    from app.models.location import Constraints, LocationRequirement, Vibe
+    from app.grounding.models import VibeCategory
+
+    project_repo = ProjectRepository()
+    scene_repo = SceneRepository()
+
+    project = project_repo.get(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Convert frontend location data to LocationRequirement objects
+    requirements = []
+    for loc in request.locations:
+        # Parse vibe - handle both string and dict formats
+        vibe_data = loc.get("vibe", {})
+        primary_vibe = vibe_data.get("primary", "residential")
+        secondary_vibe = vibe_data.get("secondary")
+
+        # Try to match vibe string to enum, fallback to residential
+        try:
+            primary_category = VibeCategory(primary_vibe.lower().replace(" ", "_"))
+        except ValueError:
+            primary_category = VibeCategory.RESIDENTIAL
+
+        try:
+            secondary_category = VibeCategory(secondary_vibe.lower().replace(" ", "_")) if secondary_vibe else None
+        except (ValueError, AttributeError):
+            secondary_category = None
+
+        vibe = Vibe(
+            primary=primary_category,
+            secondary=secondary_category,
+            descriptors=vibe_data.get("descriptors", []),
+            confidence=vibe_data.get("confidence", 0.8),
+        )
+
+        # Parse constraints
+        constraints_data = loc.get("constraints", {})
+        constraints = Constraints(
+            interior_exterior=constraints_data.get("interior_exterior", "interior"),
+            time_of_day=constraints_data.get("time_of_day", "day"),
+            special_requirements=constraints_data.get("special_requirements", []),
+        )
+
+        # Create LocationRequirement - always generate a new UUID for the scene
+        # The frontend's scene_id might not be a valid UUID
+        req = LocationRequirement(
+            id=str(uuid4()),
+            project_id=project_id,
+            scene_number=loc.get("scene_number", "1"),
+            scene_header=loc.get("scene_header", "UNKNOWN"),
+            page_numbers=loc.get("page_numbers", []),
+            script_excerpt=loc.get("script_context", loc.get("script_excerpt", "")),
+            vibe=vibe,
+            constraints=constraints,
+            estimated_shoot_hours=loc.get("estimated_shoot_duration_hours", loc.get("estimated_shoot_hours", 8)),
+            priority=loc.get("priority", "important"),
+            target_city=project.get("target_city", "Los Angeles, CA"),
+            search_radius_km=loc.get("search_radius_km", 50.0),
+            max_results=loc.get("max_results", 10),
+            location_description=loc.get("location_description", ""),
+            scouting_notes=loc.get("scouting_notes", ""),
+        )
+        requirements.append(req)
+
+    # Bulk save to database
+    if requirements:
+        try:
+            saved_scenes = scene_repo.create_many(requirements)
+            logger.info(
+                "Bulk saved scenes from script analysis",
+                project_id=project_id,
+                count=len(saved_scenes),
+            )
+            return {
+                "success": True,
+                "saved_count": len(saved_scenes),
+                "scene_ids": [s["id"] for s in saved_scenes],
+            }
+        except Exception as e:
+            logger.exception("Failed to bulk save scenes", error=str(e))
+            raise HTTPException(status_code=500, detail=f"Failed to save scenes: {str(e)}")
+
+    return {
+        "success": True,
+        "saved_count": 0,
+        "scene_ids": [],
+    }
+
+
 @router.post("/{project_id}/scenes")
 async def create_scene(project_id: str, request: CreateSceneRequest) -> dict[str, Any]:
     """

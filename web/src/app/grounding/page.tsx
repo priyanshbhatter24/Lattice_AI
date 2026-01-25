@@ -20,6 +20,12 @@ import type {
 
 type GroundingState = "idle" | "selecting" | "grounding" | "complete";
 
+const GROUNDING_STEPS = [
+  { phase: "selecting", label: "Select", sublabel: "Choose scenes" },
+  { phase: "grounding", label: "Discover", sublabel: "Finding venues" },
+  { phase: "complete", label: "Review", sublabel: "Results ready" },
+] as const;
+
 interface SceneResult {
   scene_id: string;
   scene_header: string;
@@ -59,6 +65,8 @@ function GroundingPageContent() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [expandedScenes, setExpandedScenes] = useState<Set<string>>(new Set());
+  const [latestCandidate, setLatestCandidate] = useState<LocationCandidate | null>(null);
+  const [allDiscoveredVenues, setAllDiscoveredVenues] = useState<LocationCandidate[]>([]);
 
   // Load projects
   useEffect(() => {
@@ -162,6 +170,8 @@ function GroundingPageContent() {
     setSceneResults(new Map());
     setProgress({ processed: 0, total: selectedSceneIds.size, percent: 0 });
     setError(null);
+    setLatestCandidate(null);
+    setAllDiscoveredVenues([]);
 
     const cleanup = groundScenesWithCallback(
       Array.from(selectedSceneIds),
@@ -191,11 +201,14 @@ function GroundingPageContent() {
             break;
 
           case "candidate":
+            const newCandidate = event.data.candidate;
+            setLatestCandidate(newCandidate);
+            setAllDiscoveredVenues(prev => [...prev, newCandidate]);
             setSceneResults((prev) => {
               const next = new Map(prev);
               const result = next.get(event.data.scene_id);
               if (result) {
-                result.candidates = [...result.candidates, event.data.candidate];
+                result.candidates = [...result.candidates, newCandidate];
                 next.set(event.data.scene_id, result);
               }
               return next;
@@ -618,190 +631,373 @@ function GroundingPageContent() {
 
             {/* Grounding Progress */}
             {groundingState === "grounding" && (
-              <div className="paper-card animate-fade-in" style={{ marginBottom: "1.5rem", overflow: "hidden" }}>
-                {/* Header */}
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    padding: "1rem 1.25rem",
-                    borderBottom: "1px solid var(--color-border-subtle)",
-                    backgroundColor: "var(--color-bg-muted)",
-                  }}
-                >
-                  <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-                    <div style={{ position: "relative" }}>
-                      <div
-                        style={{
-                          width: "2.5rem",
-                          height: "2.5rem",
-                          borderRadius: "50%",
-                          backgroundColor: "var(--color-accent-light)",
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                        }}
-                      >
-                        <svg
-                          width={18}
-                          height={18}
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="var(--color-accent)"
-                          strokeWidth={2}
-                          className="animate-spin"
+              <div className="animate-fade-in" style={{ marginBottom: "1.5rem" }}>
+                {/* Progress Panel */}
+                <div className="paper-card" style={{ overflow: "hidden", marginBottom: "1.5rem" }}>
+                  {/* Header with scene info */}
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      padding: "1rem 1.25rem",
+                      borderBottom: "1px solid var(--color-border-subtle)",
+                      backgroundColor: "var(--color-bg-muted)",
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+                      <div style={{ position: "relative" }}>
+                        <div
+                          style={{
+                            width: "2.5rem",
+                            height: "2.5rem",
+                            borderRadius: "8px",
+                            backgroundColor: "var(--color-accent-light)",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                          }}
                         >
-                          <path d="M21 12a9 9 0 11-6.219-8.56" />
-                        </svg>
+                          <svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke="var(--color-accent)" strokeWidth={2}>
+                            <circle cx="12" cy="10" r="3" />
+                            <path d="M12 21.7C17.3 17 20 13 20 10a8 8 0 1 0-16 0c0 3 2.7 7 8 11.7z" />
+                          </svg>
+                        </div>
+                        <div
+                          className="animate-ping"
+                          style={{
+                            position: "absolute",
+                            top: "-2px",
+                            right: "-2px",
+                            width: "10px",
+                            height: "10px",
+                            borderRadius: "50%",
+                            backgroundColor: "var(--color-accent)",
+                          }}
+                        />
+                      </div>
+                      <div>
+                        <p style={{ fontSize: "0.875rem", fontWeight: 500, color: "var(--color-text)" }}>
+                          {currentSceneHeader || "Initializing search..."}
+                        </p>
+                        <p style={{ fontSize: "0.75rem", color: "var(--color-text-muted)" }}>
+                          Searching in {targetCity}
+                        </p>
                       </div>
                     </div>
-                    <div>
-                      <p style={{ fontSize: "0.875rem", fontWeight: 500, color: "var(--color-text)" }}>
-                        Discovering Locations
-                      </p>
-                      <p style={{ fontSize: "0.75rem", color: "var(--color-text-muted)" }}>
-                        {currentSceneHeader || "Initializing..."}
-                      </p>
-                    </div>
-                  </div>
-                  <div
-                    style={{
-                      fontSize: "0.6875rem",
-                      fontWeight: 600,
-                      textTransform: "uppercase",
-                      letterSpacing: "0.05em",
-                      color: "var(--color-accent)",
-                    }}
-                  >
-                    Processing
-                  </div>
-                </div>
-
-                {/* Progress */}
-                <div style={{ padding: "1rem 1.25rem" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "0.5rem" }}>
-                    <span style={{ fontSize: "0.75rem", color: "var(--color-text-secondary)" }}>
-                      Scene {progress.processed} of {progress.total}
-                    </span>
-                    <span style={{ fontSize: "0.75rem", fontWeight: 600, color: "var(--color-accent)" }}>
-                      {progress.percent}%
-                    </span>
-                  </div>
-                  <div
-                    style={{
-                      height: "6px",
-                      backgroundColor: "var(--color-bg-muted)",
-                      borderRadius: "3px",
-                      overflow: "hidden",
-                    }}
-                  >
                     <div
                       style={{
-                        height: "100%",
-                        width: `${progress.percent}%`,
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "0.5rem",
+                        padding: "0.5rem 0.75rem",
+                        borderRadius: "20px",
                         backgroundColor: "var(--color-accent)",
-                        borderRadius: "3px",
-                        transition: "width 0.3s ease",
+                        color: "white",
                       }}
-                    />
+                    >
+                      <div
+                        className="animate-spin"
+                        style={{ width: "12px", height: "12px", border: "2px solid rgba(255,255,255,0.3)", borderTopColor: "white", borderRadius: "50%" }}
+                      />
+                      <span style={{ fontSize: "0.75rem", fontWeight: 600 }}>Searching</span>
+                    </div>
                   </div>
-                  <p style={{ fontSize: "0.75rem", color: "var(--color-text-muted)", marginTop: "0.75rem" }}>
-                    {statusMessage}
-                  </p>
-                </div>
 
-                {/* Live candidate count */}
-                <div
-                  style={{
-                    padding: "0.75rem 1.25rem",
-                    borderTop: "1px solid var(--color-border-subtle)",
-                    backgroundColor: "var(--color-bg)",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "1rem",
-                  }}
-                >
-                  <div style={{ display: "flex", alignItems: "center", gap: "0.375rem" }}>
-                    <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="var(--color-success)" strokeWidth={2}>
-                      <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" />
-                      <circle cx="12" cy="10" r="3" />
-                    </svg>
-                    <span style={{ fontSize: "0.8125rem", color: "var(--color-text-secondary)" }}>
-                      <strong style={{ color: "var(--color-success)" }}>{totalCandidatesFound}</strong> venues discovered
+                  {/* Step Progress */}
+                  <div style={{ padding: "1.25rem" }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "1rem" }}>
+                      {GROUNDING_STEPS.map((step, i) => {
+                        const stepPhases = ["selecting", "grounding", "complete"];
+                        const currentIdx = stepPhases.indexOf(groundingState);
+                        const stepIdx = stepPhases.indexOf(step.phase);
+                        const isActive = stepIdx === currentIdx;
+                        const isComplete = stepIdx < currentIdx;
+
+                        return (
+                          <div key={step.phase} style={{ display: "flex", flex: 1, alignItems: "center" }}>
+                            <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+                              <div
+                                style={{
+                                  width: "2rem",
+                                  height: "2rem",
+                                  borderRadius: "50%",
+                                  display: "flex",
+                                  alignItems: "center",
+                                  justifyContent: "center",
+                                  fontSize: "0.75rem",
+                                  fontWeight: 600,
+                                  backgroundColor: isComplete ? "var(--color-success)" : isActive ? "var(--color-accent)" : "var(--color-bg-muted)",
+                                  color: isComplete || isActive ? "white" : "var(--color-text-subtle)",
+                                  boxShadow: isActive ? "0 0 0 4px var(--color-accent-light)" : "none",
+                                  transition: "all 0.3s ease",
+                                }}
+                              >
+                                {isComplete ? (
+                                  <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3}>
+                                    <polyline points="20 6 9 17 4 12" />
+                                  </svg>
+                                ) : isActive ? (
+                                  <div className="animate-pulse" style={{ width: "8px", height: "8px", borderRadius: "50%", backgroundColor: "white" }} />
+                                ) : (
+                                  i + 1
+                                )}
+                              </div>
+                              <span style={{ marginTop: "0.5rem", fontSize: "0.6875rem", fontWeight: 500, color: isActive ? "var(--color-text)" : "var(--color-text-subtle)" }}>
+                                {step.label}
+                              </span>
+                            </div>
+                            {i < GROUNDING_STEPS.length - 1 && (
+                              <div
+                                style={{
+                                  flex: 1,
+                                  height: "2px",
+                                  margin: "0 0.5rem",
+                                  marginBottom: "1.5rem",
+                                  backgroundColor: isComplete ? "var(--color-success)" : "var(--color-border)",
+                                  transition: "background-color 0.3s ease",
+                                }}
+                              />
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* Progress bar */}
+                    <div style={{ marginBottom: "0.75rem" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "0.375rem" }}>
+                        <span style={{ fontSize: "0.75rem", color: "var(--color-text-secondary)" }}>
+                          Scene {progress.processed + 1} of {progress.total}
+                        </span>
+                        <span style={{ fontSize: "0.75rem", fontWeight: 600, color: "var(--color-accent)" }}>
+                          {Math.round(progress.percent)}%
+                        </span>
+                      </div>
+                      <div style={{ height: "6px", backgroundColor: "var(--color-bg-muted)", borderRadius: "3px", overflow: "hidden" }}>
+                        <div
+                          style={{
+                            height: "100%",
+                            width: `${progress.percent}%`,
+                            backgroundColor: "var(--color-accent)",
+                            borderRadius: "3px",
+                            transition: "width 0.3s ease",
+                          }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Live stats footer */}
+                  <div
+                    style={{
+                      padding: "0.875rem 1.25rem",
+                      borderTop: "1px solid var(--color-border-subtle)",
+                      backgroundColor: "var(--color-bg)",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                      <div
+                        className="animate-pulse"
+                        style={{
+                          width: "8px",
+                          height: "8px",
+                          borderRadius: "50%",
+                          backgroundColor: "var(--color-success)",
+                        }}
+                      />
+                      <span style={{ fontSize: "0.8125rem", color: "var(--color-text-secondary)" }}>
+                        <strong style={{ color: "var(--color-success)", fontSize: "1rem" }}>{totalCandidatesFound}</strong> venues discovered
+                      </span>
+                    </div>
+                    <span style={{ fontSize: "0.75rem", color: "var(--color-text-subtle)" }}>
+                      {sceneResults.size} scenes processed
                     </span>
                   </div>
                 </div>
+
+                {/* Live Streaming Venues */}
+                {allDiscoveredVenues.length > 0 && (
+                  <div>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "1rem" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+                        <h2 style={{ fontFamily: "var(--font-display)", fontSize: "1.125rem", fontWeight: 600, color: "var(--color-text)" }}>
+                          Venues Discovered
+                        </h2>
+                        <div
+                          className="animate-pulse"
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "0.375rem",
+                            padding: "0.375rem 0.75rem",
+                            borderRadius: "20px",
+                            backgroundColor: "var(--color-success-light)",
+                          }}
+                        >
+                          <div style={{ width: "6px", height: "6px", borderRadius: "50%", backgroundColor: "var(--color-success)" }} />
+                          <span style={{ fontSize: "0.8125rem", fontWeight: 700, color: "var(--color-success)" }}>
+                            {allDiscoveredVenues.length}
+                          </span>
+                        </div>
+                      </div>
+                      <p style={{ fontSize: "0.75rem", color: "var(--color-text-subtle)" }}>
+                        Real-time results from Google Maps
+                      </p>
+                    </div>
+
+                    <div
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))",
+                        gap: "1rem",
+                      }}
+                    >
+                      {allDiscoveredVenues.slice(-12).map((candidate, idx) => (
+                        <div
+                          key={candidate.id}
+                          className="animate-fade-in"
+                          style={{ animationDelay: `${Math.min(idx * 50, 200)}ms` }}
+                        >
+                          <LiveVenueCard candidate={candidate} isLatest={idx === allDiscoveredVenues.slice(-12).length - 1} />
+                        </div>
+                      ))}
+                    </div>
+
+                    {allDiscoveredVenues.length > 12 && (
+                      <p style={{ textAlign: "center", marginTop: "1rem", fontSize: "0.8125rem", color: "var(--color-text-muted)" }}>
+                        Showing latest 12 of {allDiscoveredVenues.length} venues...
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {/* Waiting for first venue */}
+                {allDiscoveredVenues.length === 0 && (
+                  <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "3rem" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.75rem" }}>
+                      <div className="animate-bounce" style={{ width: "10px", height: "10px", borderRadius: "50%", backgroundColor: "var(--color-accent)" }} />
+                      <div className="animate-bounce" style={{ width: "10px", height: "10px", borderRadius: "50%", backgroundColor: "var(--color-accent)", animationDelay: "150ms" }} />
+                      <div className="animate-bounce" style={{ width: "10px", height: "10px", borderRadius: "50%", backgroundColor: "var(--color-accent)", animationDelay: "300ms" }} />
+                    </div>
+                    <p style={{ fontSize: "0.875rem", color: "var(--color-text-muted)" }}>
+                      Searching for venues...
+                    </p>
+                  </div>
+                )}
               </div>
             )}
 
             {/* Completion state */}
             {groundingState === "complete" && (
-              <div className="paper-card animate-fade-in" style={{ marginBottom: "1.5rem", padding: "1.25rem" }}>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "1rem" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-                    <div
-                      style={{
-                        width: "2.5rem",
-                        height: "2.5rem",
-                        borderRadius: "50%",
-                        backgroundColor: "var(--color-success-light)",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                      }}
-                    >
-                      <svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke="var(--color-success)" strokeWidth={2.5}>
-                        <polyline points="20 6 9 17 4 12" />
-                      </svg>
+              <div className="animate-fade-in" style={{ marginBottom: "1.5rem" }}>
+                {/* Success banner */}
+                <div
+                  className="paper-card"
+                  style={{
+                    padding: "1.5rem",
+                    marginBottom: "1.5rem",
+                    background: "linear-gradient(135deg, var(--color-success-light) 0%, var(--color-bg-card) 100%)",
+                    borderColor: "var(--color-success)",
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "1.5rem" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
+                      <div
+                        className="animate-checkmark"
+                        style={{
+                          width: "3.5rem",
+                          height: "3.5rem",
+                          borderRadius: "50%",
+                          backgroundColor: "var(--color-success)",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          boxShadow: "0 4px 12px rgba(74, 124, 89, 0.3)",
+                        }}
+                      >
+                        <svg width={24} height={24} viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth={3}>
+                          <polyline points="20 6 9 17 4 12" />
+                        </svg>
+                      </div>
+                      <div>
+                        <h2 style={{ fontFamily: "var(--font-display)", fontSize: "1.25rem", fontWeight: 600, color: "var(--color-text)", marginBottom: "0.25rem" }}>
+                          Discovery Complete!
+                        </h2>
+                        <p style={{ fontSize: "0.875rem", color: "var(--color-text-muted)" }}>
+                          Found <strong style={{ color: "var(--color-success)" }}>{totalCandidatesFound}</strong> real venues across <strong>{sceneResults.size}</strong> scene locations
+                        </p>
+                      </div>
                     </div>
-                    <div>
-                      <p style={{ fontSize: "0.9375rem", fontWeight: 600, color: "var(--color-text)" }}>
-                        Discovery Complete
-                      </p>
-                      <p style={{ fontSize: "0.8125rem", color: "var(--color-text-muted)" }}>
-                        Found {totalCandidatesFound} venues across {sceneResults.size} scenes
-                      </p>
+                    <div style={{ display: "flex", gap: "0.75rem" }}>
+                      <button
+                        onClick={handleReset}
+                        style={{
+                          padding: "0.75rem 1.25rem",
+                          backgroundColor: "white",
+                          color: "var(--color-text-secondary)",
+                          border: "1px solid var(--color-border)",
+                          borderRadius: "8px",
+                          fontSize: "0.875rem",
+                          fontWeight: 500,
+                          cursor: "pointer",
+                          transition: "all 0.2s ease",
+                        }}
+                      >
+                        Discover More
+                      </button>
+                      <button
+                        onClick={() => router.push(`/calls?project=${selectedProjectId}`)}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "0.5rem",
+                          padding: "0.75rem 1.5rem",
+                          backgroundColor: "var(--color-accent)",
+                          color: "white",
+                          border: "none",
+                          borderRadius: "8px",
+                          fontSize: "0.875rem",
+                          fontWeight: 600,
+                          cursor: "pointer",
+                          boxShadow: "0 2px 8px rgba(139, 58, 58, 0.25)",
+                          transition: "all 0.2s ease",
+                        }}
+                      >
+                        <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                          <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z" />
+                        </svg>
+                        Start Calling Venues
+                        <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                          <path d="M5 12h14M12 5l7 7-7 7" />
+                        </svg>
+                      </button>
                     </div>
                   </div>
-                  <div style={{ display: "flex", gap: "0.75rem" }}>
-                    <button
-                      onClick={handleReset}
-                      style={{
-                        padding: "0.625rem 1rem",
-                        backgroundColor: "transparent",
-                        color: "var(--color-text-secondary)",
-                        border: "1px solid var(--color-border)",
-                        borderRadius: "6px",
-                        fontSize: "0.8125rem",
-                        fontWeight: 500,
-                        cursor: "pointer",
-                      }}
-                    >
-                      Discover More
-                    </button>
-                    <button
-                      onClick={() => router.push(`/calls?project=${selectedProjectId}`)}
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: "0.375rem",
-                        padding: "0.625rem 1rem",
-                        backgroundColor: "var(--color-accent)",
-                        color: "white",
-                        border: "none",
-                        borderRadius: "6px",
-                        fontSize: "0.8125rem",
-                        fontWeight: 500,
-                        cursor: "pointer",
-                      }}
-                    >
-                      Start Calling
-                      <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-                        <path d="M5 12h14M12 5l7 7-7 7" />
-                      </svg>
-                    </button>
-                  </div>
+                </div>
+
+                {/* Results Summary */}
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "1rem" }}>
+                  <h2 style={{ fontFamily: "var(--font-display)", fontSize: "1.125rem", fontWeight: 600, color: "var(--color-text)" }}>
+                    All Discovered Venues ({totalCandidatesFound})
+                  </h2>
+                </div>
+
+                {/* All venues grid */}
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))",
+                    gap: "1rem",
+                  }}
+                  className="stagger-children"
+                >
+                  {allDiscoveredVenues.map((candidate) => (
+                    <LiveVenueCard key={candidate.id} candidate={candidate} isLatest={false} />
+                  ))}
                 </div>
               </div>
             )}
@@ -1011,96 +1207,375 @@ function GroundingPageContent() {
 }
 
 // ══════════════════════════════════════════════════════════
+// Live Venue Card (for streaming results)
+// ══════════════════════════════════════════════════════════
+
+function LiveVenueCard({ candidate, isLatest }: { candidate: LocationCandidate; isLatest: boolean }) {
+  const [imageError, setImageError] = useState(false);
+  const hasPhoto = candidate.photo_urls && candidate.photo_urls.length > 0 && !imageError;
+
+  return (
+    <div
+      className={`paper-card ${isLatest ? "location-new" : ""}`}
+      style={{
+        position: "relative",
+        overflow: "hidden",
+        borderColor: isLatest ? "var(--color-success)" : undefined,
+        transition: "all 0.3s ease",
+      }}
+    >
+      {/* Photo Section */}
+      {hasPhoto && (
+        <div
+          style={{
+            position: "relative",
+            width: "100%",
+            height: "140px",
+            overflow: "hidden",
+            backgroundColor: "var(--color-bg-muted)",
+          }}
+        >
+          <img
+            src={candidate.photo_urls[0]}
+            alt={candidate.venue_name}
+            onError={() => setImageError(true)}
+            style={{
+              width: "100%",
+              height: "100%",
+              objectFit: "cover",
+              transition: "transform 0.3s ease",
+            }}
+          />
+          {/* Photo overlay gradient */}
+          <div
+            style={{
+              position: "absolute",
+              bottom: 0,
+              left: 0,
+              right: 0,
+              height: "60px",
+              background: "linear-gradient(transparent, rgba(0,0,0,0.4))",
+              pointerEvents: "none",
+            }}
+          />
+          {/* Match score badge on photo */}
+          <div
+            style={{
+              position: "absolute",
+              top: "8px",
+              right: "8px",
+              display: "flex",
+              alignItems: "center",
+              gap: "0.25rem",
+              padding: "0.375rem 0.625rem",
+              borderRadius: "12px",
+              backgroundColor: candidate.match_score >= 0.7 ? "var(--color-success)" : "var(--color-warning)",
+              color: "white",
+              boxShadow: "0 2px 6px rgba(0,0,0,0.25)",
+            }}
+          >
+            <svg width={12} height={12} viewBox="0 0 24 24" fill="currentColor">
+              <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+            </svg>
+            <span style={{ fontSize: "0.75rem", fontWeight: 700 }}>
+              {Math.round(candidate.match_score * 100)}%
+            </span>
+          </div>
+          {/* Photo count badge */}
+          {candidate.photo_urls.length > 1 && (
+            <div
+              style={{
+                position: "absolute",
+                bottom: "8px",
+                left: "8px",
+                display: "flex",
+                alignItems: "center",
+                gap: "0.25rem",
+                padding: "0.25rem 0.5rem",
+                borderRadius: "4px",
+                backgroundColor: "rgba(0,0,0,0.6)",
+                color: "white",
+                fontSize: "0.625rem",
+                fontWeight: 500,
+              }}
+            >
+              <svg width={10} height={10} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                <circle cx="8.5" cy="8.5" r="1.5" />
+                <polyline points="21 15 16 10 5 21" />
+              </svg>
+              {candidate.photo_urls.length} photos
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Content */}
+      <div style={{ padding: "1rem" }}>
+        {/* Header with name and score (score only shown if no photo) */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "0.625rem" }}>
+          <div style={{ flex: 1, marginRight: "0.5rem" }}>
+            <h4
+              style={{
+                fontFamily: "var(--font-display)",
+                fontSize: "0.9375rem",
+                fontWeight: 600,
+                color: "var(--color-text)",
+                lineHeight: 1.3,
+                marginBottom: "0.25rem",
+              }}
+            >
+              {candidate.venue_name}
+            </h4>
+            <p style={{ fontSize: "0.75rem", color: "var(--color-text-muted)", lineHeight: 1.4 }}>
+              {candidate.formatted_address}
+            </p>
+          </div>
+          {!hasPhoto && (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "0.25rem",
+                padding: "0.25rem 0.5rem",
+                borderRadius: "12px",
+                backgroundColor: candidate.match_score >= 0.7 ? "var(--color-success-light)" : "rgba(184, 134, 11, 0.15)",
+              }}
+            >
+              <svg width={12} height={12} viewBox="0 0 24 24" fill={candidate.match_score >= 0.7 ? "var(--color-success)" : "var(--color-warning)"}>
+                <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+              </svg>
+              <span
+                style={{
+                  fontSize: "0.75rem",
+                  fontWeight: 700,
+                  color: candidate.match_score >= 0.7 ? "var(--color-success)" : "var(--color-warning)",
+                }}
+              >
+                {Math.round(candidate.match_score * 100)}%
+              </span>
+            </div>
+          )}
+        </div>
+
+        {/* Quick info row */}
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "0.75rem", fontSize: "0.6875rem" }}>
+          {candidate.google_rating && (
+            <span style={{ display: "flex", alignItems: "center", gap: "0.25rem", color: "var(--color-text-secondary)" }}>
+              <svg width={10} height={10} viewBox="0 0 24 24" fill="var(--color-warning)">
+                <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+              </svg>
+              {candidate.google_rating.toFixed(1)} rating
+            </span>
+          )}
+          {candidate.phone_number ? (
+            <span style={{ display: "flex", alignItems: "center", gap: "0.25rem", color: "var(--color-success)" }}>
+              <svg width={10} height={10} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z" />
+              </svg>
+              Has phone
+            </span>
+          ) : (
+            <span style={{ display: "flex", alignItems: "center", gap: "0.25rem", color: "var(--color-text-subtle)" }}>
+              <svg width={10} height={10} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                <circle cx="12" cy="12" r="10" />
+                <line x1="4.93" y1="4.93" x2="19.07" y2="19.07" />
+              </svg>
+              No phone
+            </span>
+          )}
+          {candidate.website_url && (
+            <span style={{ display: "flex", alignItems: "center", gap: "0.25rem", color: "var(--color-accent)" }}>
+              <svg width={10} height={10} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                <circle cx="12" cy="12" r="10" />
+                <line x1="2" y1="12" x2="22" y2="12" />
+                <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+              </svg>
+              Website
+            </span>
+          )}
+        </div>
+
+        {/* Match reasoning if available */}
+        {candidate.match_reasoning && (
+          <p
+            style={{
+              marginTop: "0.625rem",
+              paddingTop: "0.625rem",
+              borderTop: "1px solid var(--color-border-subtle)",
+              fontSize: "0.6875rem",
+              color: "var(--color-text-secondary)",
+              lineHeight: 1.4,
+            }}
+          >
+            {candidate.match_reasoning}
+          </p>
+        )}
+      </div>
+
+      {/* Latest badge */}
+      {isLatest && (
+        <div
+          style={{
+            position: "absolute",
+            top: hasPhoto ? "148px" : "-8px",
+            right: "12px",
+            padding: "0.25rem 0.5rem",
+            borderRadius: "4px",
+            backgroundColor: "var(--color-success)",
+            color: "white",
+            fontSize: "0.625rem",
+            fontWeight: 700,
+            textTransform: "uppercase",
+            letterSpacing: "0.05em",
+            boxShadow: "0 2px 4px rgba(0,0,0,0.15)",
+          }}
+        >
+          New
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════
 // Candidate Card Component
 // ══════════════════════════════════════════════════════════
 
 function CandidateCard({ candidate }: { candidate: LocationCandidate }) {
+  const [imageError, setImageError] = useState(false);
+  const hasPhoto = candidate.photo_urls && candidate.photo_urls.length > 0 && !imageError;
+
   return (
     <div
       style={{
         backgroundColor: "var(--color-bg-elevated)",
         border: "1px solid var(--color-border-subtle)",
         borderRadius: "6px",
-        padding: "0.875rem",
+        overflow: "hidden",
       }}
     >
-      {/* Name & Score */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "0.5rem" }}>
-        <h4
+      {/* Photo */}
+      {hasPhoto && (
+        <div
           style={{
-            fontFamily: "var(--font-display)",
-            fontSize: "0.875rem",
-            fontWeight: 600,
-            color: "var(--color-text)",
-            lineHeight: 1.3,
-            flex: 1,
-            marginRight: "0.5rem",
+            position: "relative",
+            width: "100%",
+            height: "100px",
+            overflow: "hidden",
+            backgroundColor: "var(--color-bg-muted)",
           }}
         >
-          {candidate.venue_name}
-        </h4>
-        <span
-          style={{
-            fontSize: "0.6875rem",
-            fontWeight: 600,
-            color: candidate.match_score >= 0.7 ? "var(--color-success)" : "var(--color-warning)",
-            whiteSpace: "nowrap",
-          }}
-        >
-          {Math.round(candidate.match_score * 100)}%
-        </span>
-      </div>
-
-      {/* Address */}
-      <p style={{ fontSize: "0.75rem", color: "var(--color-text-muted)", marginBottom: "0.5rem", lineHeight: 1.4 }}>
-        {candidate.formatted_address}
-      </p>
-
-      {/* Details row */}
-      <div style={{ display: "flex", flexWrap: "wrap", gap: "0.75rem", fontSize: "0.6875rem", color: "var(--color-text-subtle)" }}>
-        {candidate.phone_number && (
-          <span style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}>
-            <svg width={10} height={10} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-              <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z" />
-            </svg>
-            Has phone
-          </span>
-        )}
-        {candidate.google_rating && (
-          <span style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}>
-            <svg width={10} height={10} viewBox="0 0 24 24" fill="var(--color-warning)" stroke="none">
-              <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
-            </svg>
-            {candidate.google_rating.toFixed(1)}
-          </span>
-        )}
-        {!candidate.phone_number && (
-          <span style={{ color: "var(--color-error)", display: "flex", alignItems: "center", gap: "0.25rem" }}>
-            <svg width={10} height={10} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-              <circle cx="12" cy="12" r="10" />
-              <line x1="15" y1="9" x2="9" y2="15" />
-              <line x1="9" y1="9" x2="15" y2="15" />
-            </svg>
-            No phone
-          </span>
-        )}
-      </div>
-
-      {/* Match reasoning */}
-      {candidate.match_reasoning && (
-        <p
-          style={{
-            fontSize: "0.6875rem",
-            color: "var(--color-text-secondary)",
-            marginTop: "0.5rem",
-            lineHeight: 1.4,
-            borderTop: "1px solid var(--color-border-subtle)",
-            paddingTop: "0.5rem",
-          }}
-        >
-          {candidate.match_reasoning}
-        </p>
+          <img
+            src={candidate.photo_urls[0]}
+            alt={candidate.venue_name}
+            onError={() => setImageError(true)}
+            style={{
+              width: "100%",
+              height: "100%",
+              objectFit: "cover",
+            }}
+          />
+          {/* Score badge on photo */}
+          <div
+            style={{
+              position: "absolute",
+              top: "6px",
+              right: "6px",
+              padding: "0.25rem 0.5rem",
+              borderRadius: "8px",
+              backgroundColor: candidate.match_score >= 0.7 ? "var(--color-success)" : "var(--color-warning)",
+              color: "white",
+              fontSize: "0.6875rem",
+              fontWeight: 700,
+            }}
+          >
+            {Math.round(candidate.match_score * 100)}%
+          </div>
+        </div>
       )}
+
+      <div style={{ padding: "0.875rem" }}>
+        {/* Name & Score */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "0.5rem" }}>
+          <h4
+            style={{
+              fontFamily: "var(--font-display)",
+              fontSize: "0.875rem",
+              fontWeight: 600,
+              color: "var(--color-text)",
+              lineHeight: 1.3,
+              flex: 1,
+              marginRight: "0.5rem",
+            }}
+          >
+            {candidate.venue_name}
+          </h4>
+          {!hasPhoto && (
+            <span
+              style={{
+                fontSize: "0.6875rem",
+                fontWeight: 600,
+                color: candidate.match_score >= 0.7 ? "var(--color-success)" : "var(--color-warning)",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {Math.round(candidate.match_score * 100)}%
+            </span>
+          )}
+        </div>
+
+        {/* Address */}
+        <p style={{ fontSize: "0.75rem", color: "var(--color-text-muted)", marginBottom: "0.5rem", lineHeight: 1.4 }}>
+          {candidate.formatted_address}
+        </p>
+
+        {/* Details row */}
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "0.75rem", fontSize: "0.6875rem", color: "var(--color-text-subtle)" }}>
+          {candidate.phone_number && (
+            <span style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}>
+              <svg width={10} height={10} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z" />
+              </svg>
+              Has phone
+            </span>
+          )}
+          {candidate.google_rating && (
+            <span style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}>
+              <svg width={10} height={10} viewBox="0 0 24 24" fill="var(--color-warning)" stroke="none">
+                <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+              </svg>
+              {candidate.google_rating.toFixed(1)}
+            </span>
+          )}
+          {!candidate.phone_number && (
+            <span style={{ color: "var(--color-error)", display: "flex", alignItems: "center", gap: "0.25rem" }}>
+              <svg width={10} height={10} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                <circle cx="12" cy="12" r="10" />
+                <line x1="15" y1="9" x2="9" y2="15" />
+                <line x1="9" y1="9" x2="15" y2="15" />
+              </svg>
+              No phone
+            </span>
+          )}
+        </div>
+
+        {/* Match reasoning */}
+        {candidate.match_reasoning && (
+          <p
+            style={{
+              fontSize: "0.6875rem",
+              color: "var(--color-text-secondary)",
+              marginTop: "0.5rem",
+              lineHeight: 1.4,
+              borderTop: "1px solid var(--color-border-subtle)",
+              paddingTop: "0.5rem",
+            }}
+          >
+            {candidate.match_reasoning}
+          </p>
+        )}
+      </div>
     </div>
   );
 }

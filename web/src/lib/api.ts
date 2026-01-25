@@ -241,6 +241,26 @@ export async function listProjectScenes(projectId: string): Promise<Scene[]> {
   return response.json();
 }
 
+/**
+ * Bulk save analyzed locations (from script analysis) to a project as scenes.
+ * This connects Stage 1 output to Stage 2 input.
+ */
+export async function bulkSaveScenesToProject(
+  projectId: string,
+  locations: Array<Record<string, unknown>>
+): Promise<{ success: boolean; saved_count: number; scene_ids: string[] }> {
+  const response = await fetch(`${API_BASE}/api/projects/${projectId}/bulk-scenes`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ locations }),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: "Failed to save scenes" }));
+    throw new Error(error.detail);
+  }
+  return response.json();
+}
+
 // ══════════════════════════════════════════════════════════
 // Location Candidates API
 // ══════════════════════════════════════════════════════════
@@ -370,7 +390,8 @@ export function groundScenesWithCallback(
   saveToDb: boolean,
   onEvent: (event: GroundingSSEEvent) => void,
   onError: (error: Error) => void,
-  onComplete: () => void
+  onComplete: () => void,
+  parallelWorkers: number = 5  // Number of parallel workers for speed
 ): () => void {
   const abortController = new AbortController();
 
@@ -385,6 +406,7 @@ export function groundScenesWithCallback(
       target_city: targetCity,
       max_results: maxResults,
       save_to_db: saveToDb,
+      parallel_workers: parallelWorkers,
     }),
     signal: abortController.signal,
   })

@@ -1,13 +1,31 @@
 import re
 from collections import defaultdict
 
+import structlog
+
 from app.models.location import SceneOccurrence, UniqueLocation
 
 
-# Pattern to match screenplay scene headers
-# Matches: INT. LOCATION - DAY, EXT. LOCATION - NIGHT, INT/EXT. LOCATION - DAY, etc.
+logger = structlog.get_logger()
+
+# Pattern to match screenplay scene headers - more flexible version
+# Matches various formats:
+#   INT. LOCATION - DAY
+#   EXT LOCATION - NIGHT  (no period)
+#   INT/EXT. LOCATION - DAY
+#   1. INT. LOCATION - DAY  (numbered scenes)
+#   SC. 1 INT. LOCATION - DAY  (TV scripts)
+#   INT. LOCATION (DAY)  (parenthetical time)
+#   INT. LOCATION  (no time - will default to "day")
+#   SCENE 1 - INT. LOCATION - DAY  (alternative TV format)
 SCENE_HEADER_PATTERN = re.compile(
-    r"^(INT\.|EXT\.|INT/EXT\.|INT\./EXT\.|I/E\.)\s*(.+?)\s*[-–—]\s*(DAY|NIGHT|DAWN|DUSK|MORNING|EVENING|LATER|CONTINUOUS|SAME|MOMENTS LATER|SAME TIME|LATER THAT NIGHT|LATER THAT DAY)",
+    r"^(?:SCENE\s*\d+\s*[-–—]\s*)?(?:SC\.?\s*\d+\s*)?(?:\d+\.?\s*)?(INT\.?|EXT\.?|INT\.?/EXT\.?|I/E\.?|INTERIOR|EXTERIOR)\s+([A-Z0-9][A-Z0-9\s\'\"\-\.\,\/\(\)]+?)(?:\s*[-–—]\s*(DAY|NIGHT|DAWN|DUSK|MORNING|EVENING|LATER|CONTINUOUS|SAME|MOMENTS?\s*LATER|SAME\s*TIME|LATER\s*THAT\s*(?:NIGHT|DAY))|\s*\((DAY|NIGHT|DAWN|DUSK|MORNING|EVENING)\)|\s*$)",
+    re.MULTILINE | re.IGNORECASE,
+)
+
+# Fallback pattern for simpler matching - just INT/EXT followed by location
+FALLBACK_SCENE_PATTERN = re.compile(
+    r"^(?:\d+\.?\s*)?(INT\.?|EXT\.?)\s+([A-Z][A-Z0-9\s\'\"\-\.]+?)(?:\s*[-–—]|\s*\(|\s*$)",
     re.MULTILINE | re.IGNORECASE,
 )
 
@@ -62,12 +80,42 @@ def extract_unique_locations(pages: list[tuple[int, str]]) -> list[UniqueLocatio
         lambda: {"occurrences": [], "page_numbers": set(), "raw_header": "", "int_ext": "", "time": ""}
     )
 
+    logger.info("Starting location extraction", total_pages=len(pages))
+    total_matches = 0
+
+    # First pass: count matches with main pattern to decide if we need fallback
+    main_pattern_matches = 0
+    for page_num, page_text in pages:
+        for match in SCENE_HEADER_PATTERN.finditer(page_text):
+            main_pattern_matches += 1
+
+    # If no matches found with main pattern, use fallback
+    use_fallback = main_pattern_matches == 0
+    if use_fallback:
+        logger.warning("No matches with main pattern, trying fallback pattern")
+    else:
+        logger.info("Main pattern found matches", count=main_pattern_matches)
+
+    # Choose which pattern to use
+    pattern = FALLBACK_SCENE_PATTERN if use_fallback else SCENE_HEADER_PATTERN
+
     for page_num, page_text in pages:
         # Find all scene headers on this page
-        for match in SCENE_HEADER_PATTERN.finditer(page_text):
-            int_ext = match.group(1).upper().rstrip(".")
+        for match in pattern.finditer(page_text):
+            total_matches += 1
+
+            int_ext_raw = match.group(1).upper().rstrip(".")
+            # Normalize INTERIOR/EXTERIOR to INT/EXT
+            int_ext = int_ext_raw.replace("INTERIOR", "INT").replace("EXTERIOR", "EXT")
             location = match.group(2).strip()
-            time_of_day = match.group(3).upper()
+
+            # Time can be in group 3 (dash format) or group 4 (parenthetical format) - only for main pattern
+            if use_fallback:
+                time_of_day = "DAY"  # Default for fallback
+            else:
+                time_of_day = (match.group(3) or match.group(4) or "DAY").upper()
+
+            logger.debug("Found scene header", page=page_num, int_ext=int_ext, location=location, time=time_of_day, fallback=use_fallback)
 
             # Create a normalized key for deduplication
             # Key includes location name and INT/EXT, but NOT time of day
@@ -107,5 +155,11 @@ def extract_unique_locations(pages: list[tuple[int, str]]) -> list[UniqueLocatio
 
     # Sort by first page number appearance
     unique_locations.sort(key=lambda loc: loc.page_numbers[0] if loc.page_numbers else 0)
+
+    logger.info(
+        "Location extraction complete",
+        total_matches=total_matches,
+        unique_locations=len(unique_locations),
+    )
 
     return unique_locations
