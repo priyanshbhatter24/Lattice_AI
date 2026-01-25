@@ -8,7 +8,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from app.services.pdf_parser import extract_text_with_pages
 from app.services.scene_extractor import extract_unique_locations
-from app.services.llm_worker import process_locations_streaming
+from app.services.llm_worker import deduplicate_locations_with_llm, process_locations_streaming
 
 
 logger = structlog.get_logger()
@@ -77,17 +77,38 @@ async def analyze_script(
             }
 
             locations = extract_unique_locations(pages)
-            total_locations = len(locations)
-
-            logger.info("Locations identified", count=total_locations)
+            initial_count = len(locations)
+            logger.info("Locations identified", count=initial_count)
 
             yield {
                 "event": "status",
                 "data": json.dumps({
-                    "message": f"Found {total_locations} unique locations",
-                    "total": total_locations,
+                    "message": f"Found {initial_count} locations, deduplicating...",
+                    "total": initial_count,
                 }),
             }
+
+            # Deduplicate similar locations using LLM
+            locations = await deduplicate_locations_with_llm(locations)
+            total_locations = len(locations)
+
+            if total_locations < initial_count:
+                logger.info("Locations deduplicated", before=initial_count, after=total_locations)
+                yield {
+                    "event": "status",
+                    "data": json.dumps({
+                        "message": f"Merged to {total_locations} unique locations",
+                        "total": total_locations,
+                    }),
+                }
+            else:
+                yield {
+                    "event": "status",
+                    "data": json.dumps({
+                        "message": f"Found {total_locations} unique locations",
+                        "total": total_locations,
+                    }),
+                }
 
             if total_locations == 0:
                 yield {

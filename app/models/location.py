@@ -21,12 +21,10 @@ class Constraints(BaseModel):
 
     interior_exterior: Literal["interior", "exterior", "both"]
     time_of_day: Literal["day", "night", "both"]
-    min_ceiling_height_ft: int | None = None
-    min_floor_space_sqft: int | None = None
-    parking_spaces_needed: int = Field(default=10)
-    power_requirements: Literal["standard_120v", "heavy_duty", "generator_ok"] = "standard_120v"
-    acoustic_needs: Literal["dialogue_heavy", "action_ok", "any"] = "any"
-    special_requirements: list[str] = Field(default_factory=list)
+    special_requirements: list[str] = Field(
+        default_factory=list,
+        description="Specific requirements derived from the script (props, stunts, features)",
+    )
 
 
 class LocationRequirement(BaseModel):

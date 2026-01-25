@@ -20,34 +20,35 @@ LOCATION_ANALYSIS_PROMPT = """You are a professional film location scout analyzi
 Analyze this screenplay location and extract everything a location scout would need to find a real-world filming location.
 
 SCENE HEADER: {scene_header}
-
 SCRIPT CONTEXT (from {num_occurrences} scene(s) in the script):
 {script_context}
 
-Provide a JSON response with the following structure:
+IMPORTANT RULES:
+1. ONLY include details that are explicitly mentioned or clearly implied in the script
+2. If the script doesn't describe the location in detail, keep your output brief - don't pad with generic filmmaking advice
+3. DO NOT include generic requirements that apply to every location (like "space for camera coverage", "controllable sound", "parking for crew")
+4. special_requirements should ONLY list things specifically mentioned in the script (props, stunts, architectural features, specific actions)
+5. If the script gives minimal location details, it's okay for special_requirements to be empty or very short
+
+Provide a JSON response:
 {{
   "vibe": {{
-    "primary": "<main aesthetic: industrial, luxury, suburban, urban-gritty, natural, retro-vintage, futuristic, institutional, commercial, residential>",
+    "primary": "<aesthetic: industrial, luxury, suburban, urban-gritty, natural, retro-vintage, futuristic, institutional, commercial, residential>",
     "secondary": "<optional secondary aesthetic or null>",
-    "descriptors": ["<3-5 specific visual descriptors from the script>"],
-    "confidence": <0.0-1.0 confidence score>
+    "descriptors": ["<3-5 visual descriptors ONLY from script details, not generic assumptions>"],
+    "confidence": <0.0-1.0 based on how much detail the script provides about this location>
   }},
   "constraints": {{
     "interior_exterior": "<interior, exterior, or both>",
     "time_of_day": "<day, night, or both>",
-    "min_ceiling_height_ft": <estimated minimum ceiling height or null>,
-    "min_floor_space_sqft": <estimated minimum floor space or null>,
-    "parking_spaces_needed": <estimated parking needs, default 10>,
-    "power_requirements": "<standard_120v, heavy_duty, or generator_ok>",
-    "acoustic_needs": "<dialogue_heavy, action_ok, or any>",
-    "special_requirements": ["<list of specific requirements from the script>"]
+    "special_requirements": ["<ONLY list specific things from the script: props, set dressing, stunts, architectural features, specific actions. If the script doesn't mention specifics, this can be empty or very short.>"]
   }},
-  "location_description": "<A detailed paragraph describing exactly what this location should look like, including architectural style, key features, atmosphere, era/period if applicable, and any specific details mentioned in the script. This should help a location scout visualize and find a real place.>",
-  "scouting_notes": "<Practical notes for location scouts: what to look for when visiting potential locations, must-haves, deal-breakers, and any logistical considerations for filming.>",
-  "estimated_shoot_duration_hours": <estimated hours based on scene complexity and number of occurrences>
+  "location_description": "<Describe what this location should look like based on the script. Include architectural style, key features, atmosphere, and era/period if specified. Be detailed when the script is detailed, brief when the script is sparse.>",
+  "scouting_notes": "<Only mention deal-breakers or must-haves SPECIFIC to this location based on script requirements. Skip generic filming logistics that apply to every location. If nothing specific, just say 'Standard location requirements.'>",
+  "estimated_shoot_duration_hours": <estimate based on scene complexity and number of pages>
 }}
 
-Respond with valid JSON only. No markdown, no code blocks, just the JSON object."""
+Respond with valid JSON only."""
 
 
 async def analyze_location_with_llm(
@@ -99,11 +100,6 @@ async def analyze_location_with_llm(
             constraints = Constraints(
                 interior_exterior=data["constraints"]["interior_exterior"],
                 time_of_day=data["constraints"]["time_of_day"],
-                min_ceiling_height_ft=data["constraints"].get("min_ceiling_height_ft"),
-                min_floor_space_sqft=data["constraints"].get("min_floor_space_sqft"),
-                parking_spaces_needed=data["constraints"].get("parking_spaces_needed", 10),
-                power_requirements=data["constraints"].get("power_requirements", "standard_120v"),
-                acoustic_needs=data["constraints"].get("acoustic_needs", "any"),
                 special_requirements=data["constraints"].get("special_requirements", []),
             )
 
@@ -187,3 +183,99 @@ async def process_locations_streaming(
 
     # Ensure all tasks complete
     await asyncio.gather(*tasks, return_exceptions=True)
+
+
+DEDUP_PROMPT = """Analyze these screenplay scene headers and identify which ones refer to the SAME physical location.
+
+Scene headers:
+{location_list}
+
+Group headers that refer to the SAME location. Consider:
+- "MARK'S DORM ROOM" and "MARK'S ROOM" = same location
+- "CAMERON AND TYLER'S DORM ROOM" and "TYLER AND CAMERON'S DORM ROOM" = same (name order swapped)
+- "PORCELLIAN CLUB" and "PORCELLIAN" = same (suffix dropped)
+- "FIRST DEPOSITION ROOM" vs "SECOND DEPOSITION ROOM" = DIFFERENT rooms
+- Generic names like "HALLWAY" or "BEDROOM" in different contexts might be different locations
+
+Return JSON where keys are the canonical name and values are arrays of headers to merge:
+{{
+  "canonical_header": ["header1", "header2"],
+  ...
+}}
+
+Only include entries where there are duplicates to merge. Respond with valid JSON only."""
+
+
+async def deduplicate_locations_with_llm(
+    locations: list[UniqueLocation],
+) -> list[UniqueLocation]:
+    """
+    Use LLM to identify and merge duplicate locations with similar names.
+    """
+    if not locations:
+        return locations
+
+    headers = [loc.scene_header for loc in locations]
+    location_list = "\n".join(f"- {h}" for h in headers)
+
+    try:
+        response = await client.chat.completions.create(
+            model=settings.openai_model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You identify duplicate screenplay locations. Respond only with valid JSON.",
+                },
+                {"role": "user", "content": DEDUP_PROMPT.format(location_list=location_list)},
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.1,
+        )
+
+        content = response.choices[0].message.content
+        merge_groups = json.loads(content)
+
+        if not merge_groups:
+            return locations
+
+        # Build mapping from header -> canonical header
+        header_to_canonical: dict[str, str] = {}
+        for canonical, duplicates in merge_groups.items():
+            for dup in duplicates:
+                header_to_canonical[dup] = canonical
+
+        # Merge locations
+        merged: dict[str, UniqueLocation] = {}
+        for loc in locations:
+            canonical = header_to_canonical.get(loc.scene_header, loc.scene_header)
+
+            if canonical in merged:
+                existing = merged[canonical]
+                existing.occurrences.extend(loc.occurrences)
+                existing.page_numbers = sorted(set(existing.page_numbers + loc.page_numbers))
+                if existing.time_of_day != loc.time_of_day and loc.time_of_day != "both":
+                    existing.time_of_day = "both"
+            else:
+                merged[canonical] = UniqueLocation(
+                    scene_header=canonical,
+                    interior_exterior=loc.interior_exterior,
+                    time_of_day=loc.time_of_day,
+                    occurrences=loc.occurrences.copy(),
+                    page_numbers=loc.page_numbers.copy(),
+                )
+
+        result = list(merged.values())
+        result.sort(key=lambda loc: loc.page_numbers[0] if loc.page_numbers else 0)
+
+        logger.info(
+            "LLM deduplication complete",
+            original_count=len(locations),
+            merged_count=len(result),
+            merges=len(locations) - len(result),
+        )
+
+        return result
+
+    except Exception as e:
+        logger.warning("LLM deduplication failed, using original locations", error=str(e))
+        return locations
