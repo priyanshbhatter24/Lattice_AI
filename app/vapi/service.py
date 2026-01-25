@@ -17,6 +17,7 @@ from app.db.repository import LocationCandidateRepository
 from app.grounding.models import VapiCallStatus
 from app.vapi.call_context import CallContext
 from app.vapi.config import get_vapi_config
+from app.vapi.transcript_extractor import extract_structured_data
 
 logger = structlog.get_logger()
 
@@ -194,24 +195,81 @@ class VapiService:
             Parsed data ready for database update
         """
         message_type = payload.get("message", {}).get("type")
+        print(f"[PARSE] Message type: {message_type}")
 
         if message_type == "end-of-call-report":
+            print("[PARSE] Processing end-of-call-report...")
             return self._parse_end_of_call_report(payload)
         elif message_type == "status-update":
+            print("[PARSE] Processing status-update...")
             return self._parse_status_update(payload)
         else:
+            print(f"[PARSE] Unknown message type: {message_type}")
             logger.warning("Unknown webhook message type", type=message_type)
             return {}
 
+    def _normalize_structured_data(self, raw_data: dict[str, Any]) -> dict[str, Any]:
+        """
+        Normalize Vapi structured data from UUID-keyed format to named fields.
+
+        Vapi returns: {"uuid": {"name": "Field Name", "result": value}}
+        We need: {"field_name": value}
+        """
+        normalized = {}
+
+        # Map Vapi display names to our field names
+        name_mapping = {
+            "Availability Provided": "venue_available",
+            "Available Times": "availability_details",
+            "Call Summary": "call_summary",
+            "Price Quoted": "price_quoted",
+            "Price Unit": "price_unit",
+            "Contact Name": "contact_name",
+            "Contact Title": "contact_title",
+            "Reservation Method": "reservation_method",
+            "Reservation Details": "reservation_details",
+            "Red Flags": "red_flags",
+            "Availability Slots": "availability_slots",
+            "Additional Notes": "additional_notes",
+        }
+
+        print(f"[NORMALIZE] Raw structured data: {raw_data}")
+        logger.info("Raw structured data from Vapi", raw_data=raw_data)
+
+        for key, value in raw_data.items():
+            if isinstance(value, dict) and "name" in value and "result" in value:
+                # UUID-keyed format - normalize it
+                field_name = name_mapping.get(value["name"], value["name"].lower().replace(" ", "_"))
+                normalized[field_name] = value["result"]
+                print(f"[NORMALIZE] Mapped '{value['name']}' -> '{field_name}' = {value['result']}")
+            else:
+                # Already in expected format
+                normalized[key] = value
+                print(f"[NORMALIZE] Direct: {key} = {value}")
+
+        print(f"[NORMALIZE] Final normalized data: {normalized}")
+        logger.info("Normalized structured data", normalized=normalized)
+        return normalized
+
     def _parse_end_of_call_report(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Parse end-of-call-report webhook."""
+        print("[END-OF-CALL] Starting to parse end-of-call-report...")
         message = payload.get("message", {})
         call = message.get("call", {})
-        analysis = message.get("analysis", {})
         metadata = call.get("metadata", {})
+        transcript = message.get("transcript", "")
 
-        # Get structured data from analysis
-        structured_data = analysis.get("structuredData", {})
+        print(f"[END-OF-CALL] Candidate ID from metadata: {metadata.get('candidate_id')}")
+        print(f"[END-OF-CALL] Call ID: {call.get('id')}")
+        print(f"[END-OF-CALL] Duration: {call.get('duration')}")
+        print(f"[END-OF-CALL] Transcript length: {len(transcript)} chars")
+
+        # Extract structured data from transcript using OpenAI
+        extracted = {}
+        if transcript:
+            print("[END-OF-CALL] Extracting structured data from transcript...")
+            extracted = extract_structured_data(transcript)
+            print(f"[END-OF-CALL] Extracted data: {extracted}")
 
         # Build the update data
         update_data = {
@@ -221,28 +279,30 @@ class VapiService:
             "vapi_call_completed_at": datetime.now(timezone.utc).isoformat(),
             "vapi_call_duration_seconds": call.get("duration"),
             "vapi_recording_url": call.get("recordingUrl"),
-            "vapi_transcript": message.get("transcript"),
-            # Extracted data
-            "venue_available": structured_data.get("venue_available"),
-            "availability_details": str(structured_data.get("availability_slots", [])),
-            "negotiated_price": structured_data.get("price_quoted"),
-            "price_unit": structured_data.get("price_unit"),
-            "manager_name": structured_data.get("contact_name"),
-            "manager_title": structured_data.get("contact_title"),
-            "manager_email": structured_data.get("reservation_details")
-            if structured_data.get("reservation_method") == "email"
+            "vapi_transcript": transcript,
+            # Extracted data from OpenAI
+            "venue_available": extracted.get("venue_available"),
+            "availability_details": extracted.get("availability_details"),
+            "negotiated_price": extracted.get("price_quoted"),
+            "price_unit": extracted.get("price_unit"),
+            "manager_name": extracted.get("manager_name"),
+            "manager_title": extracted.get("manager_title"),
+            "manager_email": extracted.get("reservation_details")
+            if extracted.get("reservation_method") == "email"
             else None,
-            "red_flags": structured_data.get("red_flags", []),
-            "call_summary": analysis.get("summary"),
-            "call_success_score": analysis.get("successEvaluation"),
+            "red_flags": [],
+            "call_summary": extracted.get("call_summary"),
+            "call_success_score": None,
         }
 
         # Add reservation method details
-        reservation_method = structured_data.get("reservation_method")
+        reservation_method = extracted.get("reservation_method")
         if reservation_method:
             update_data["reservation_method"] = reservation_method
-            update_data["reservation_details"] = structured_data.get("reservation_details")
+            update_data["reservation_details"] = extracted.get("reservation_details")
 
+        print(f"[END-OF-CALL] Final update_data: {update_data}")
+        logger.info("Final update_data for database", update_data=update_data)
         return update_data
 
     def _parse_status_update(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -278,19 +338,26 @@ class VapiService:
         Returns:
             Updated candidate data, or None if update failed
         """
+        print("[UPDATE] Starting update_candidate_from_webhook...")
         parsed = self.parse_webhook_payload(payload)
 
+        print(f"[UPDATE] Parsed data: {parsed}")
         if not parsed or not parsed.get("candidate_id"):
+            print("[UPDATE] ERROR: No candidate_id in parsed data!")
             logger.warning("Could not parse webhook payload")
             return None
 
         candidate_id = parsed.pop("candidate_id")
+        print(f"[UPDATE] Candidate ID: {candidate_id}")
 
         # Filter out None values
         update_data = {k: v for k, v in parsed.items() if v is not None}
+        print(f"[UPDATE] Filtered update_data (non-None): {update_data}")
 
         if update_data:
+            print(f"[UPDATE] Calling candidate_repo.update({candidate_id}, ...)")
             result = self.candidate_repo.update(candidate_id, **update_data)
+            print(f"[UPDATE] Repository update result: {result}")
             logger.info(
                 "Updated candidate from webhook",
                 candidate_id=candidate_id,
@@ -298,6 +365,7 @@ class VapiService:
             )
             return result
 
+        print("[UPDATE] No data to update!")
         return None
 
 
