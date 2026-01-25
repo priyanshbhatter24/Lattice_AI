@@ -1,7 +1,10 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { listProjects, createProject } from "@/lib/api";
+import { useState, useEffect, useRef } from "react";
+import { useRouter } from "next/navigation";
+import Link from "next/link";
+import { listProjects, createProject, deleteProject, uploadScriptToStorage, updateProject } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
 import type { Project, CreateProjectRequest } from "@/lib/types";
 
 export default function ProjectsPage() {
@@ -10,6 +13,14 @@ export default function ProjectsPage() {
   const [error, setError] = useState<string | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
+  const [showDeleteModal, setShowDeleteModal] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [uploadingScript, setUploadingScript] = useState(false);
+  const [scriptFile, setScriptFile] = useState<File | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const { user, signOut, loading: authLoading } = useAuth();
+  const router = useRouter();
 
   // Form state
   const [formData, setFormData] = useState<CreateProjectRequest>({
@@ -19,10 +30,12 @@ export default function ProjectsPage() {
     crew_size: 10,
   });
 
-  // Load projects
+  // Load projects when authenticated
   useEffect(() => {
-    loadProjects();
-  }, []);
+    if (!authLoading && user) {
+      loadProjects();
+    }
+  }, [authLoading, user]);
 
   async function loadProjects() {
     setIsLoading(true);
@@ -43,8 +56,27 @@ export default function ProjectsPage() {
 
     setIsCreating(true);
     try {
+      // Step 1: Create the project first
       const newProject = await createProject(formData);
-      setProjects((prev) => [newProject, ...prev]);
+
+      // Step 2: Upload script and link to project if provided
+      if (scriptFile && user) {
+        setUploadingScript(true);
+        try {
+          const { path } = await uploadScriptToStorage(scriptFile, user.id);
+          // Step 3: Update project with script path
+          const updatedProject = await updateProject(newProject.id, { script_path: path });
+          setProjects((prev) => [updatedProject, ...prev]);
+        } catch (uploadError) {
+          console.error("Failed to upload script:", uploadError);
+          // Project was created successfully, just add it without script
+          setProjects((prev) => [newProject, ...prev]);
+        }
+        setUploadingScript(false);
+      } else {
+        setProjects((prev) => [newProject, ...prev]);
+      }
+
       setShowCreateModal(false);
       setFormData({
         name: "",
@@ -52,12 +84,40 @@ export default function ProjectsPage() {
         target_city: "Los Angeles, CA",
         crew_size: 10,
       });
+      setScriptFile(null);
     } catch (err) {
       console.error("Failed to create project:", err);
       setError("Failed to create project");
     } finally {
       setIsCreating(false);
+      setUploadingScript(false);
     }
+  }
+
+  async function handleDeleteProject(projectId: string) {
+    setIsDeleting(true);
+    try {
+      await deleteProject(projectId);
+      setProjects((prev) => prev.filter((p) => p.id !== projectId));
+      setShowDeleteModal(null);
+    } catch (err) {
+      console.error("Failed to delete project:", err);
+      setError("Failed to delete project");
+    } finally {
+      setIsDeleting(false);
+    }
+  }
+
+  function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (file && file.type === "application/pdf") {
+      setScriptFile(file);
+    }
+  }
+
+  async function handleSignOut() {
+    await signOut();
+    router.push("/login");
   }
 
   return (
@@ -109,8 +169,8 @@ export default function ProjectsPage() {
           </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
-            <button
-              onClick={() => setShowCreateModal(true)}
+            <Link
+              href="/workflow"
               style={{
                 display: "flex",
                 alignItems: "center",
@@ -123,6 +183,7 @@ export default function ProjectsPage() {
                 fontSize: "0.875rem",
                 fontWeight: 500,
                 cursor: "pointer",
+                textDecoration: "none",
               }}
             >
               <svg
@@ -137,19 +198,33 @@ export default function ProjectsPage() {
                 <line x1="5" y1="12" x2="19" y2="12" />
               </svg>
               New Project
-            </button>
+            </Link>
 
-            <a
-              href="/"
-              style={{
-                padding: "0.5rem 0.75rem",
-                color: "var(--color-text-muted)",
-                fontSize: "0.875rem",
-                textDecoration: "none",
-              }}
-            >
-              Script Analysis
-            </a>
+            {/* User menu */}
+            <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+              <span
+                style={{
+                  fontSize: "0.8125rem",
+                  color: "var(--color-text-muted)",
+                }}
+              >
+                {user?.email}
+              </span>
+              <button
+                onClick={handleSignOut}
+                style={{
+                  padding: "0.5rem 0.75rem",
+                  backgroundColor: "transparent",
+                  color: "var(--color-text-muted)",
+                  border: "1px solid var(--color-border)",
+                  borderRadius: "4px",
+                  fontSize: "0.8125rem",
+                  cursor: "pointer",
+                }}
+              >
+                Sign Out
+              </button>
+            </div>
           </div>
         </div>
       </header>
@@ -200,7 +275,7 @@ export default function ProjectsPage() {
               color: "var(--color-text-muted)",
             }}
           >
-            <div className="animate-spin" style={{ marginBottom: "1rem" }}>
+            <div className="animate-spin" style={{ marginBottom: "1rem", display: "inline-block" }}>
               <svg
                 width={32}
                 height={32}
@@ -237,9 +312,10 @@ export default function ProjectsPage() {
               <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
             </svg>
             <p style={{ marginBottom: "1rem" }}>No projects yet</p>
-            <button
-              onClick={() => setShowCreateModal(true)}
+            <Link
+              href="/workflow"
               style={{
+                display: "inline-block",
                 padding: "0.625rem 1rem",
                 backgroundColor: "var(--color-accent)",
                 color: "white",
@@ -248,10 +324,11 @@ export default function ProjectsPage() {
                 fontSize: "0.875rem",
                 fontWeight: 500,
                 cursor: "pointer",
+                textDecoration: "none",
               }}
             >
               Create Your First Project
-            </button>
+            </Link>
           </div>
         )}
 
@@ -343,7 +420,7 @@ export default function ProjectsPage() {
                 {/* Actions */}
                 <div style={{ display: "flex", gap: "0.5rem" }}>
                   <a
-                    href={`/calls?project=${project.id}`}
+                    href={`/projects/${project.id}`}
                     style={{
                       flex: 1,
                       display: "flex",
@@ -368,10 +445,37 @@ export default function ProjectsPage() {
                       stroke="currentColor"
                       strokeWidth={2}
                     >
-                      <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z" />
+                      <path d="M5 12h14M12 5l7 7-7 7" />
                     </svg>
-                    Calls
+                    Open
                   </a>
+                  <button
+                    onClick={() => setShowDeleteModal(project.id)}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      padding: "0.5rem",
+                      backgroundColor: "transparent",
+                      color: "var(--color-text-muted)",
+                      border: "1px solid var(--color-border)",
+                      borderRadius: "4px",
+                      cursor: "pointer",
+                    }}
+                    title="Delete project"
+                  >
+                    <svg
+                      width={14}
+                      height={14}
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth={2}
+                    >
+                      <polyline points="3 6 5 6 21 6" />
+                      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                    </svg>
+                  </button>
                 </div>
               </div>
             ))}
@@ -566,6 +670,58 @@ export default function ProjectsPage() {
                 </div>
               </div>
 
+              {/* Script Upload */}
+              <div style={{ marginBottom: "1rem" }}>
+                <label
+                  style={{
+                    display: "block",
+                    fontSize: "0.75rem",
+                    fontWeight: 500,
+                    color: "var(--color-text-secondary)",
+                    marginBottom: "0.375rem",
+                  }}
+                >
+                  Script (PDF)
+                </label>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".pdf"
+                  onChange={handleFileSelect}
+                  style={{ display: "none" }}
+                />
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  style={{
+                    width: "100%",
+                    padding: "1rem",
+                    border: "2px dashed var(--color-border)",
+                    borderRadius: "6px",
+                    backgroundColor: "var(--color-bg)",
+                    color: scriptFile ? "var(--color-text)" : "var(--color-text-muted)",
+                    fontSize: "0.875rem",
+                    cursor: "pointer",
+                    textAlign: "center",
+                  }}
+                >
+                  {scriptFile ? (
+                    <span style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "0.5rem" }}>
+                      <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                        <polyline points="14 2 14 8 20 8" />
+                      </svg>
+                      {scriptFile.name}
+                    </span>
+                  ) : (
+                    <span>Click to upload screenplay PDF</span>
+                  )}
+                </button>
+                <p style={{ fontSize: "0.75rem", color: "var(--color-text-muted)", marginTop: "0.375rem" }}>
+                  Optional. You can also upload scripts later.
+                </p>
+              </div>
+
               {/* Submit */}
               <div
                 style={{
@@ -620,10 +776,128 @@ export default function ProjectsPage() {
                         : 1,
                   }}
                 >
-                  {isCreating ? "Creating..." : "Create Project"}
+                  {uploadingScript
+                    ? "Uploading script..."
+                    : isCreating
+                    ? "Creating..."
+                    : "Create Project"}
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {showDeleteModal && (
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: "rgba(0, 0, 0, 0.5)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 100,
+          }}
+          onClick={() => setShowDeleteModal(null)}
+        >
+          <div
+            className="paper-card animate-slide-in"
+            style={{
+              width: "100%",
+              maxWidth: "400px",
+              margin: "1rem",
+              padding: "1.5rem",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ textAlign: "center", marginBottom: "1.5rem" }}>
+              <div
+                style={{
+                  width: "48px",
+                  height: "48px",
+                  borderRadius: "50%",
+                  backgroundColor: "rgba(155, 59, 59, 0.1)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  margin: "0 auto 1rem",
+                }}
+              >
+                <svg
+                  width={24}
+                  height={24}
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="var(--color-error)"
+                  strokeWidth={2}
+                >
+                  <polyline points="3 6 5 6 21 6" />
+                  <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                </svg>
+              </div>
+              <h3
+                style={{
+                  fontFamily: "var(--font-display)",
+                  fontSize: "1.125rem",
+                  fontWeight: 600,
+                  color: "var(--color-text)",
+                  marginBottom: "0.5rem",
+                }}
+              >
+                Delete Project?
+              </h3>
+              <p
+                style={{
+                  fontSize: "0.875rem",
+                  color: "var(--color-text-muted)",
+                  lineHeight: 1.5,
+                }}
+              >
+                This will permanently delete the project and all its scenes, location candidates, and bookings.
+              </p>
+            </div>
+
+            <div style={{ display: "flex", gap: "0.75rem" }}>
+              <button
+                onClick={() => setShowDeleteModal(null)}
+                disabled={isDeleting}
+                style={{
+                  flex: 1,
+                  padding: "0.625rem 1rem",
+                  backgroundColor: "transparent",
+                  color: "var(--color-text-secondary)",
+                  border: "1px solid var(--color-border)",
+                  borderRadius: "6px",
+                  fontSize: "0.875rem",
+                  cursor: isDeleting ? "not-allowed" : "pointer",
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => handleDeleteProject(showDeleteModal)}
+                disabled={isDeleting}
+                style={{
+                  flex: 1,
+                  padding: "0.625rem 1rem",
+                  backgroundColor: "var(--color-error)",
+                  color: "white",
+                  border: "none",
+                  borderRadius: "6px",
+                  fontSize: "0.875rem",
+                  fontWeight: 500,
+                  cursor: isDeleting ? "not-allowed" : "pointer",
+                  opacity: isDeleting ? 0.7 : 1,
+                }}
+              >
+                {isDeleting ? "Deleting..." : "Delete"}
+              </button>
+            </div>
           </div>
         </div>
       )}

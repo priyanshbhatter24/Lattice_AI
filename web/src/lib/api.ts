@@ -18,20 +18,49 @@ import type {
   GroundableScene,
   GroundingSSEEvent,
 } from "./types";
-
 // Backend API base URL - adjust for production
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 /**
- * Upload a screenplay PDF file.
+ * Get auth headers for API requests.
+ * Returns empty object if not authenticated or during SSR.
+ */
+async function getAuthHeaders(): Promise<HeadersInit> {
+  // Skip during SSR/SSG
+  if (typeof window === "undefined") {
+    return {};
+  }
+
+  try {
+    const { createClient } = await import("@/utils/supabase/client");
+    const supabase = createClient();
+    const { data } = await supabase.auth.getSession();
+    console.log("[Auth] Session data:", data.session ? "exists" : "null");
+    if (data.session?.access_token) {
+      console.log("[Auth] Token found, length:", data.session.access_token.length);
+      return {
+        Authorization: `Bearer ${data.session.access_token}`,
+      };
+    }
+    console.log("[Auth] No access token in session");
+  } catch (e) {
+    console.warn("Failed to get auth token:", e);
+  }
+  return {};
+}
+
+/**
+ * Upload a screenplay PDF file to local storage (legacy method).
  * @returns Object with the file path for analysis
  */
 export async function uploadScript(file: File): Promise<{ path: string }> {
+  const authHeaders = await getAuthHeaders();
   const formData = new FormData();
   formData.append("file", file);
 
   const response = await fetch(`${API_BASE}/api/scripts/upload`, {
     method: "POST",
+    headers: authHeaders,
     body: formData,
   });
 
@@ -42,6 +71,53 @@ export async function uploadScript(file: File): Promise<{ path: string }> {
 
   const data = await response.json();
   return { path: data.path };
+}
+
+/**
+ * Upload a screenplay PDF file to Supabase Storage.
+ * Files are stored in user-specific folders: scripts/{userId}/{timestamp}_{filename}
+ * @returns Object with the storage path
+ */
+export async function uploadScriptToStorage(
+  file: File,
+  userId: string
+): Promise<{ path: string }> {
+  const { createClient } = await import("@/utils/supabase/client");
+  const supabase = createClient();
+  const path = `${userId}/${Date.now()}_${file.name}`;
+
+  const { error } = await supabase.storage
+    .from("scripts")
+    .upload(path, file, {
+      contentType: "application/pdf",
+      upsert: false,
+    });
+
+  if (error) {
+    console.error("Storage upload error:", error);
+    throw new Error(error.message || "Failed to upload script");
+  }
+
+  return { path };
+}
+
+/**
+ * Get a signed URL for a script in Supabase Storage.
+ * @param path - Storage path (e.g., "{userId}/{timestamp}_{filename}")
+ * @returns Signed URL valid for 1 hour
+ */
+export async function getScriptUrl(path: string): Promise<string> {
+  const { createClient } = await import("@/utils/supabase/client");
+  const supabase = createClient();
+  const { data, error } = await supabase.storage
+    .from("scripts")
+    .createSignedUrl(path, 3600); // 1 hour expiry
+
+  if (error || !data?.signedUrl) {
+    throw new Error("Failed to get script URL");
+  }
+
+  return data.signedUrl;
 }
 
 /**
@@ -65,16 +141,18 @@ export function analyzeScriptWithCallback(
 
   console.log("[SSE] Connecting to:", url.toString());
 
-  // Start SSE connection
-  fetch(url.toString(), {
-    method: "GET",
-    headers: {
-      Accept: "text/event-stream",
-      "Cache-Control": "no-cache",
-    },
-    signal: abortController.signal,
-  })
-    .then(async (response) => {
+  // Get auth headers and start SSE connection
+  getAuthHeaders().then((authHeaders) => {
+    fetch(url.toString(), {
+      method: "GET",
+      headers: {
+        Accept: "text/event-stream",
+        "Cache-Control": "no-cache",
+        ...authHeaders,
+      },
+      signal: abortController.signal,
+    })
+      .then(async (response) => {
       console.log("[SSE] Response status:", response.status);
       if (!response.ok) {
         throw new Error(`Analysis failed: ${response.statusText}`);
@@ -165,6 +243,7 @@ export function analyzeScriptWithCallback(
       console.error("[SSE] Error:", error);
       onError(error);
     });
+  });
 
   return () => {
     abortController.abort();
@@ -175,7 +254,10 @@ export function analyzeScriptWithCallback(
  * Get list of available scripts in the project directory.
  */
 export async function getAvailableScripts(): Promise<AvailableScript[]> {
-  const response = await fetch(`${API_BASE}/api/scripts/available`);
+  const authHeaders = await getAuthHeaders();
+  const response = await fetch(`${API_BASE}/api/scripts/available`, {
+    headers: authHeaders,
+  });
 
   if (!response.ok) {
     console.error("Failed to fetch available scripts");
@@ -194,25 +276,32 @@ export type { AvailableScript };
 // ══════════════════════════════════════════════════════════
 
 // ══════════════════════════════════════════════════════════
-// Project API
+// Project API (requires authentication)
 // ══════════════════════════════════════════════════════════
 
 export async function listProjects(limit = 50): Promise<Project[]> {
-  const response = await fetch(`${API_BASE}/api/projects?limit=${limit}`);
+  const authHeaders = await getAuthHeaders();
+  const response = await fetch(`${API_BASE}/api/projects?limit=${limit}`, {
+    headers: authHeaders,
+  });
   if (!response.ok) throw new Error("Failed to fetch projects");
   return response.json();
 }
 
 export async function getProject(projectId: string): Promise<Project> {
-  const response = await fetch(`${API_BASE}/api/projects/${projectId}`);
+  const authHeaders = await getAuthHeaders();
+  const response = await fetch(`${API_BASE}/api/projects/${projectId}`, {
+    headers: authHeaders,
+  });
   if (!response.ok) throw new Error("Project not found");
   return response.json();
 }
 
 export async function createProject(data: CreateProjectRequest): Promise<Project> {
+  const authHeaders = await getAuthHeaders();
   const response = await fetch(`${API_BASE}/api/projects`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...authHeaders },
     body: JSON.stringify(data),
   });
   if (!response.ok) {
@@ -226,17 +315,30 @@ export async function updateProject(
   projectId: string,
   updates: Partial<Project>
 ): Promise<Project> {
+  const authHeaders = await getAuthHeaders();
   const response = await fetch(`${API_BASE}/api/projects/${projectId}`, {
     method: "PATCH",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...authHeaders },
     body: JSON.stringify(updates),
   });
   if (!response.ok) throw new Error("Failed to update project");
   return response.json();
 }
 
+export async function deleteProject(projectId: string): Promise<void> {
+  const authHeaders = await getAuthHeaders();
+  const response = await fetch(`${API_BASE}/api/projects/${projectId}`, {
+    method: "DELETE",
+    headers: authHeaders,
+  });
+  if (!response.ok) throw new Error("Failed to delete project");
+}
+
 export async function listProjectScenes(projectId: string): Promise<Scene[]> {
-  const response = await fetch(`${API_BASE}/api/projects/${projectId}/scenes`);
+  const authHeaders = await getAuthHeaders();
+  const response = await fetch(`${API_BASE}/api/projects/${projectId}/scenes`, {
+    headers: authHeaders,
+  });
   if (!response.ok) throw new Error("Failed to fetch scenes");
   return response.json();
 }
@@ -247,11 +349,12 @@ export async function listProjectScenes(projectId: string): Promise<Scene[]> {
  */
 export async function bulkSaveScenesToProject(
   projectId: string,
-  locations: Array<Record<string, unknown>>
+  locations: Array<Record<string, unknown>> | LocationRequirement[]
 ): Promise<{ success: boolean; saved_count: number; scene_ids: string[] }> {
+  const authHeaders = await getAuthHeaders();
   const response = await fetch(`${API_BASE}/api/projects/${projectId}/bulk-scenes`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...authHeaders },
     body: JSON.stringify({ locations }),
   });
   if (!response.ok) {
@@ -260,6 +363,9 @@ export async function bulkSaveScenesToProject(
   }
   return response.json();
 }
+
+// Alias for backwards compatibility with analyze page
+export const saveProjectScenes = bulkSaveScenesToProject;
 
 // ══════════════════════════════════════════════════════════
 // Location Candidates API
@@ -275,13 +381,19 @@ export async function listLocations(params: {
   if (params.sceneId) query.set("scene_id", params.sceneId);
   if (params.limit) query.set("limit", params.limit.toString());
 
-  const response = await fetch(`${API_BASE}/api/locations?${query}`);
+  const authHeaders = await getAuthHeaders();
+  const response = await fetch(`${API_BASE}/api/locations?${query}`, {
+    headers: authHeaders,
+  });
   if (!response.ok) throw new Error("Failed to fetch locations");
   return response.json();
 }
 
 export async function getLocation(candidateId: string): Promise<LocationCandidate> {
-  const response = await fetch(`${API_BASE}/api/locations/${candidateId}`);
+  const authHeaders = await getAuthHeaders();
+  const response = await fetch(`${API_BASE}/api/locations/${candidateId}`, {
+    headers: authHeaders,
+  });
   if (!response.ok) throw new Error("Location not found");
   return response.json();
 }
@@ -289,9 +401,10 @@ export async function getLocation(candidateId: string): Promise<LocationCandidat
 export async function createMockLocation(
   data: CreateLocationRequest
 ): Promise<LocationCandidate> {
+  const authHeaders = await getAuthHeaders();
   const response = await fetch(`${API_BASE}/api/locations`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...authHeaders },
     body: JSON.stringify(data),
   });
   if (!response.ok) {
@@ -305,9 +418,10 @@ export async function approveLocation(
   candidateId: string,
   approvedBy: string
 ): Promise<LocationCandidate> {
+  const authHeaders = await getAuthHeaders();
   const response = await fetch(
     `${API_BASE}/api/locations/${candidateId}/approve?approved_by=${encodeURIComponent(approvedBy)}`,
-    { method: "PATCH" }
+    { method: "PATCH", headers: authHeaders }
   );
   if (!response.ok) throw new Error("Failed to approve location");
   return response.json();
@@ -317,9 +431,10 @@ export async function rejectLocation(
   candidateId: string,
   reason: string
 ): Promise<LocationCandidate> {
+  const authHeaders = await getAuthHeaders();
   const response = await fetch(
     `${API_BASE}/api/locations/${candidateId}/reject?reason=${encodeURIComponent(reason)}`,
-    { method: "PATCH" }
+    { method: "PATCH", headers: authHeaders }
   );
   if (!response.ok) throw new Error("Failed to reject location");
   return response.json();
@@ -333,9 +448,10 @@ export async function triggerCall(
   candidateId: string,
   overridePhone?: string
 ): Promise<CallResponse> {
+  const authHeaders = await getAuthHeaders();
   const response = await fetch(`${API_BASE}/api/calls/trigger`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...authHeaders },
     body: JSON.stringify({
       candidate_id: candidateId,
       override_phone_number: overridePhone,
@@ -352,9 +468,10 @@ export async function triggerBatchCalls(
   candidateIds: string[],
   maxConcurrent?: number
 ): Promise<BatchResponse> {
+  const authHeaders = await getAuthHeaders();
   const response = await fetch(`${API_BASE}/api/calls/batch`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...authHeaders },
     body: JSON.stringify({
       candidate_ids: candidateIds,
       max_concurrent: maxConcurrent,
@@ -368,7 +485,10 @@ export async function triggerBatchCalls(
 }
 
 export async function getCallStatus(vapiCallId: string): Promise<CallStatusResponse> {
-  const response = await fetch(`${API_BASE}/api/calls/${vapiCallId}`);
+  const authHeaders = await getAuthHeaders();
+  const response = await fetch(`${API_BASE}/api/calls/${vapiCallId}`, {
+    headers: authHeaders,
+  });
   if (!response.ok) throw new Error("Failed to get call status");
   return response.json();
 }
@@ -381,7 +501,10 @@ export async function getCallStatus(vapiCallId: string): Promise<CallStatusRespo
  * Get all scenes for a project that can be grounded.
  */
 export async function getGroundableScenes(projectId: string): Promise<GroundableScene[]> {
-  const response = await fetch(`${API_BASE}/api/grounding/scenes/${projectId}`);
+  const authHeaders = await getAuthHeaders();
+  const response = await fetch(`${API_BASE}/api/grounding/scenes/${projectId}`, {
+    headers: authHeaders,
+  });
   if (!response.ok) throw new Error("Failed to fetch scenes");
   return response.json();
 }
@@ -401,21 +524,24 @@ export function groundScenesWithCallback(
 ): () => void {
   const abortController = new AbortController();
 
-  fetch(`${API_BASE}/api/grounding/ground`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "text/event-stream",
-    },
-    body: JSON.stringify({
-      scene_ids: sceneIds,
-      target_city: targetCity,
-      max_results: maxResults,
-      save_to_db: saveToDb,
-      parallel_workers: parallelWorkers,
-    }),
-    signal: abortController.signal,
-  })
+  // Get auth headers asynchronously and then start the request
+  getAuthHeaders().then((authHeaders) => {
+    fetch(`${API_BASE}/api/grounding/ground`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "text/event-stream",
+        ...authHeaders,
+      },
+      body: JSON.stringify({
+        scene_ids: sceneIds,
+        target_city: targetCity,
+        max_results: maxResults,
+        save_to_db: saveToDb,
+        parallel_workers: parallelWorkers,
+      }),
+      signal: abortController.signal,
+    })
     .then(async (response) => {
       if (!response.ok) {
         throw new Error(`Grounding failed: ${response.statusText}`);
@@ -470,6 +596,7 @@ export function groundScenesWithCallback(
       }
       onError(error);
     });
+  });
 
   return () => {
     abortController.abort();

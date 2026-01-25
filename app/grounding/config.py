@@ -18,7 +18,7 @@ class GroundingConfig(BaseSettings):
     """Configuration for the grounding agent."""
 
     # Google Cloud / Vertex AI settings (for Google Maps grounding)
-    google_cloud_project: str
+    google_cloud_project: str = ""  # Required for grounding features
     google_cloud_location: str = "global"
     google_application_credentials: str = ""  # Optional: path to service account JSON
 

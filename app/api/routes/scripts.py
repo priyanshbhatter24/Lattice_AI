@@ -3,7 +3,9 @@ import time
 import tempfile
 import shutil
 from pathlib import Path
+from urllib.parse import urlparse
 
+import httpx
 import structlog
 from fastapi import APIRouter, HTTPException, Query, UploadFile, File
 from sse_starlette.sse import EventSourceResponse
@@ -71,21 +73,53 @@ async def analyze_script(
     async def event_generator():
         start_time = time.time()
         processed_count = 0
+        temp_download_path = None
 
         try:
-            # Validate file exists
-            pdf_path = Path(file_path)
-            print(f"[ANALYZE] Checking file: {pdf_path}, exists={pdf_path.exists()}")
+            # Check if file_path is a URL (Supabase signed URL) or local path
+            parsed = urlparse(file_path)
+            is_url = parsed.scheme in ("http", "https")
 
-            if not pdf_path.exists():
-                print(f"[ANALYZE] ERROR: File not found")
+            if is_url:
+                print(f"[ANALYZE] Detected URL, downloading: {file_path[:100]}...")
                 yield {
-                    "event": "error",
-                    "data": json.dumps({"error": f"File not found: {file_path}"}),
+                    "event": "status",
+                    "data": json.dumps({"message": "Downloading script from storage..."}),
                 }
-                return
 
-            if not pdf_path.suffix.lower() == ".pdf":
+                # Download the file
+                try:
+                    async with httpx.AsyncClient() as client:
+                        response = await client.get(file_path, timeout=60.0)
+                        response.raise_for_status()
+
+                        # Save to temp file
+                        temp_download_path = UPLOAD_DIR / f"download_{int(time.time())}.pdf"
+                        with open(temp_download_path, "wb") as f:
+                            f.write(response.content)
+                        pdf_path = temp_download_path
+                        print(f"[ANALYZE] Downloaded to: {pdf_path}")
+                except Exception as e:
+                    print(f"[ANALYZE] ERROR downloading: {e}")
+                    yield {
+                        "event": "error",
+                        "data": json.dumps({"error": f"Failed to download script: {str(e)}"}),
+                    }
+                    return
+            else:
+                # Local file path
+                pdf_path = Path(file_path)
+                print(f"[ANALYZE] Checking file: {pdf_path}, exists={pdf_path.exists()}")
+
+                if not pdf_path.exists():
+                    print(f"[ANALYZE] ERROR: File not found")
+                    yield {
+                        "event": "error",
+                        "data": json.dumps({"error": f"File not found: {file_path}"}),
+                    }
+                    return
+
+            if not str(pdf_path).lower().endswith(".pdf"):
                 print(f"[ANALYZE] ERROR: Not a PDF")
                 yield {
                     "event": "error",
@@ -241,6 +275,14 @@ async def analyze_script(
                 "event": "error",
                 "data": json.dumps({"error": str(e)}),
             }
+        finally:
+            # Clean up downloaded temp file
+            if temp_download_path and temp_download_path.exists():
+                try:
+                    temp_download_path.unlink()
+                    print(f"[ANALYZE] Cleaned up temp file: {temp_download_path}")
+                except Exception as e:
+                    print(f"[ANALYZE] Failed to clean up temp file: {e}")
 
     print("[ANALYZE] Returning EventSourceResponse")
     return EventSourceResponse(event_generator())

@@ -137,6 +137,7 @@ export interface Project {
   crew_size: number;
   filming_start_date?: string;
   filming_end_date?: string;
+  script_path?: string;
   status: "draft" | "active" | "completed";
   created_at: string;
   updated_at: string;
@@ -149,6 +150,7 @@ export interface CreateProjectRequest {
   crew_size?: number;
   filming_start_date?: string;
   filming_end_date?: string;
+  script_path?: string;
 }
 
 // Availability slot extracted from Vapi call

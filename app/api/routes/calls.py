@@ -2,14 +2,16 @@
 API routes for Vapi call management.
 
 Provides endpoints for triggering and monitoring voice calls.
+All endpoints require authentication.
 """
 
 from typing import Any
 
 import structlog
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from app.api.middleware.auth import AuthenticatedUser, get_current_user
 from app.db.repository import LocationCandidateRepository, ProjectRepository, SceneRepository
 from app.grounding.models import LocationCandidate
 from app.vapi.call_context import CallContext, ProjectContext
@@ -62,27 +64,34 @@ class BatchResponse(BaseModel):
 
 
 @router.post("/trigger", response_model=CallResponse)
-async def trigger_call(request: TriggerCallRequest) -> CallResponse:
+async def trigger_call(
+    request: TriggerCallRequest,
+    auth: AuthenticatedUser = Depends(get_current_user),
+) -> CallResponse:
     """
     Trigger a single outbound call to a venue.
 
     The candidate must have a phone number and be in a callable state.
     """
-    candidate_repo = LocationCandidateRepository()
-    project_repo = ProjectRepository()
-    scene_repo = SceneRepository()
+    candidate_repo = LocationCandidateRepository(access_token=auth.access_token)
+    project_repo = ProjectRepository(access_token=auth.access_token)
+    scene_repo = SceneRepository(access_token=auth.access_token)
 
     # Get candidate
     candidate_data = candidate_repo.get(request.candidate_id)
     if not candidate_data:
         raise HTTPException(status_code=404, detail="Candidate not found")
 
+    # Verify project ownership
+    project_data = project_repo.get(candidate_data["project_id"])
+    if not project_data or project_data.get("user_id") != auth.user_id:
+        raise HTTPException(status_code=404, detail="Candidate not found")
+
     # Check phone number
     if not candidate_data.get("phone_number"):
         raise HTTPException(status_code=400, detail="Candidate has no phone number")
 
-    # Get project and scene for context
-    project_data = project_repo.get(candidate_data["project_id"])
+    # Get scene for context
     scene_data = scene_repo.get(candidate_data["scene_id"])
 
     if not project_data:
@@ -144,15 +153,21 @@ async def trigger_call(request: TriggerCallRequest) -> CallResponse:
 
 
 @router.post("/batch", response_model=BatchResponse)
-async def trigger_batch_calls(request: TriggerBatchRequest) -> BatchResponse:
+async def trigger_batch_calls(
+    request: TriggerBatchRequest,
+    auth: AuthenticatedUser = Depends(get_current_user),
+) -> BatchResponse:
     """
     Trigger multiple outbound calls concurrently.
 
     Calls are limited by max_concurrent to avoid overwhelming the system.
     """
-    candidate_repo = LocationCandidateRepository()
-    project_repo = ProjectRepository()
-    scene_repo = SceneRepository()
+    candidate_repo = LocationCandidateRepository(access_token=auth.access_token)
+    project_repo = ProjectRepository(access_token=auth.access_token)
+    scene_repo = SceneRepository(access_token=auth.access_token)
+
+    # Track verified project IDs to avoid redundant lookups
+    verified_projects: set[str] = set()
 
     contexts: list[CallContext] = []
 
@@ -166,8 +181,17 @@ async def trigger_batch_calls(request: TriggerBatchRequest) -> BatchResponse:
             logger.warning("Candidate has no phone number", candidate_id=candidate_id)
             continue
 
-        # Get project and scene
-        project_data = project_repo.get(candidate_data["project_id"])
+        # Get project and verify ownership (cache verified projects)
+        project_id = candidate_data["project_id"]
+        if project_id not in verified_projects:
+            project_data = project_repo.get(project_id)
+            if not project_data or project_data.get("user_id") != auth.user_id:
+                logger.warning("Candidate not owned by user", candidate_id=candidate_id)
+                continue
+            verified_projects.add(project_id)
+        else:
+            project_data = project_repo.get(project_id)
+
         scene_data = scene_repo.get(candidate_data["scene_id"])
 
         if not project_data:
@@ -218,10 +242,16 @@ async def trigger_batch_calls(request: TriggerBatchRequest) -> BatchResponse:
 
 
 @router.get("/{vapi_call_id}", response_model=dict[str, Any])
-async def get_call_status(vapi_call_id: str) -> dict[str, Any]:
+async def get_call_status(
+    vapi_call_id: str,
+    auth: AuthenticatedUser = Depends(get_current_user),
+) -> dict[str, Any]:
     """
     Get the current status of a call from Vapi.
     """
+    # Note: We validate the user is authenticated but don't have a direct
+    # mapping from vapi_call_id to project. The vapi_call_id is opaque.
+    # In production, you might want to store vapi_call_id -> project_id mapping.
     try:
         vapi_service = get_vapi_service()
         status = await vapi_service.get_call_status(vapi_call_id)
