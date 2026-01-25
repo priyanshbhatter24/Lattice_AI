@@ -24,6 +24,7 @@ export default function LocationCandidateCard({
   onViewDetails,
 }: LocationCandidateCardProps) {
   const [expanded, setExpanded] = useState(false);
+  const [concernsExpanded, setConcernsExpanded] = useState(false);
   const [isCallingLoading, setIsCallingLoading] = useState(false);
   const [isApproveLoading, setIsApproveLoading] = useState(false);
   const [showRejectInput, setShowRejectInput] = useState(false);
@@ -277,10 +278,11 @@ export default function LocationCandidateCard({
           </div>
         )}
 
-        {/* Red flags */}
+        {/* Red flags (collapsible) */}
         {candidate.red_flags && candidate.red_flags.length > 0 && (
           <div className="red-flags" style={{ marginTop: "0.75rem" }}>
-            <div
+            <button
+              onClick={() => setConcernsExpanded(!concernsExpanded)}
               style={{
                 display: "flex",
                 alignItems: "center",
@@ -290,7 +292,11 @@ export default function LocationCandidateCard({
                 textTransform: "uppercase",
                 letterSpacing: "0.05em",
                 color: "var(--color-error)",
-                marginBottom: "0.375rem",
+                background: "none",
+                border: "none",
+                padding: 0,
+                cursor: "pointer",
+                width: "100%",
               }}
             >
               <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
@@ -298,20 +304,38 @@ export default function LocationCandidateCard({
                 <line x1="12" y1="9" x2="12" y2="13" />
                 <line x1="12" y1="17" x2="12.01" y2="17" />
               </svg>
-              Concerns
-            </div>
-            <ul
-              style={{
-                margin: 0,
-                paddingLeft: "1rem",
-                fontSize: "0.75rem",
-                color: "var(--color-text-secondary)",
-              }}
-            >
-              {candidate.red_flags.map((flag, i) => (
-                <li key={i}>{flag}</li>
-              ))}
-            </ul>
+              Concerns ({candidate.red_flags.length})
+              <svg
+                width={10}
+                height={10}
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={2}
+                style={{
+                  marginLeft: "auto",
+                  transform: concernsExpanded ? "rotate(180deg)" : "rotate(0deg)",
+                  transition: "transform 0.2s ease",
+                }}
+              >
+                <polyline points="6 9 12 15 18 9" />
+              </svg>
+            </button>
+            {concernsExpanded && (
+              <ul
+                style={{
+                  margin: 0,
+                  marginTop: "0.375rem",
+                  paddingLeft: "1rem",
+                  fontSize: "0.75rem",
+                  color: "var(--color-text-secondary)",
+                }}
+              >
+                {candidate.red_flags.map((flag, i) => (
+                  <li key={i}>{flag}</li>
+                ))}
+              </ul>
+            )}
           </div>
         )}
 
