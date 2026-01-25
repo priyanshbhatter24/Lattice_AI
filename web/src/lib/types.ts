@@ -343,6 +343,7 @@ export type GroundingSSEEventType =
   | "status"
   | "scene_start"
   | "candidate"
+  | "rejected"
   | "scene_complete"
   | "progress"
   | "complete"
@@ -362,6 +363,12 @@ export interface GroundingSceneStartEvent {
 export interface GroundingCandidateEvent {
   scene_id: string;
   candidate: LocationCandidate;
+}
+
+export interface GroundingRejectedEvent {
+  scene_id: string;
+  candidate: LocationCandidate;
+  reasons: string[];
 }
 
 export interface GroundingSceneCompleteEvent {
@@ -396,6 +403,7 @@ export type GroundingSSEEvent =
   | { type: "status"; data: GroundingStatusEvent }
   | { type: "scene_start"; data: GroundingSceneStartEvent }
   | { type: "candidate"; data: GroundingCandidateEvent }
+  | { type: "rejected"; data: GroundingRejectedEvent }
   | { type: "scene_complete"; data: GroundingSceneCompleteEvent }
   | { type: "progress"; data: GroundingProgressEvent }
   | { type: "complete"; data: GroundingCompleteEvent }

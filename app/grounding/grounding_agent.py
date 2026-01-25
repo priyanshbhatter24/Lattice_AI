@@ -329,24 +329,39 @@ Return ONLY the JSON array, no other text."""
 
         return min(score, 1.0)
 
-    async def _fetch_photos_for_candidates(self, candidates: list[LocationCandidate]) -> None:
+    async def _fetch_photos_for_candidates(
+        self,
+        candidates: list[LocationCandidate],
+        prefer_interior: bool = False,
+    ) -> None:
         """
         Fetch photos from Google Places API for all candidates.
 
         Uses the place_id to get photo references, then constructs photo URLs.
         Falls back to Street View if no Place photos available.
+
+        Args:
+            candidates: List of candidates to fetch photos for
+            prefer_interior: If True, try to get interior photos (for interior scenes)
         """
         if not self.config.google_maps_api_key:
             logger.warning("GOOGLE_MAPS_API_KEY not configured - photos will not be fetched")
             return
 
         api_key = self.config.google_maps_api_key
-        logger.info("Fetching photos for candidates", count=len(candidates), api_key_prefix=api_key[:10] + "...")
+        logger.info(
+            "Fetching photos for candidates",
+            count=len(candidates),
+            prefer_interior=prefer_interior,
+            api_key_prefix=api_key[:10] + "...",
+        )
 
         async with httpx.AsyncClient(timeout=10.0) as client:
             for candidate in candidates:
                 try:
-                    photo_urls = await self._fetch_place_photos(client, candidate, api_key)
+                    photo_urls = await self._fetch_place_photos(
+                        client, candidate, api_key, prefer_interior=prefer_interior
+                    )
                     if photo_urls:
                         candidate.photo_urls = photo_urls
                         logger.info("Got photos", venue=candidate.venue_name, count=len(photo_urls), first_url=photo_urls[0][:60] + "...")
@@ -359,14 +374,26 @@ Return ONLY the JSON array, no other text."""
         self,
         client: httpx.AsyncClient,
         candidate: LocationCandidate,
-        api_key: str
+        api_key: str,
+        prefer_interior: bool = False,
     ) -> list[str]:
         """
         Fetch photo URLs for a single candidate from Google Places API.
+
+        Args:
+            client: HTTP client
+            candidate: The location candidate
+            api_key: Google Maps API key
+            prefer_interior: If True, try to prioritize interior photos
         """
         urls = []
         place_id = candidate.google_place_id
-        logger.info("Fetching photos for venue", venue=candidate.venue_name, has_place_id=bool(place_id))
+        logger.info(
+            "Fetching photos for venue",
+            venue=candidate.venue_name,
+            has_place_id=bool(place_id),
+            prefer_interior=prefer_interior,
+        )
 
         # If no place_id, search for it using venue name and address
         if not place_id:
@@ -392,14 +419,22 @@ Return ONLY the JSON array, no other text."""
                     photos = data.get("result", {}).get("photos", [])
                     logger.info("Place Details result", venue=candidate.venue_name, api_status=status, photo_count=len(photos))
 
-                    # Get up to 3 photos
-                    for photo in photos[:3]:
+                    # Get up to 5 photos (more variety for vision analysis)
+                    # For interior preference, skip first photo (often exterior) if we have enough
+                    photos_to_use = photos
+                    if prefer_interior and len(photos) > 3:
+                        # Skip first 1-2 photos which are often exterior/building shots
+                        photos_to_use = photos[1:6]
+                    else:
+                        photos_to_use = photos[:5]
+
+                    for photo in photos_to_use:
                         photo_ref = photo.get("photo_reference")
                         if photo_ref:
-                            # Construct the photo URL
+                            # Construct the photo URL with larger size for better vision analysis
                             photo_url = (
                                 f"https://maps.googleapis.com/maps/api/place/photo"
-                                f"?maxwidth=600"
+                                f"?maxwidth=800"
                                 f"&photo_reference={photo_ref}"
                                 f"&key={api_key}"
                             )
@@ -417,11 +452,11 @@ Return ONLY the JSON array, no other text."""
             except Exception as e:
                 logger.error("Place Details API failed", venue=candidate.venue_name, error=str(e))
 
-        # Fallback to Street View if no Place photos
+        # Fallback to Street View if no Place photos (exterior only)
         if candidate.latitude and candidate.longitude:
             streetview_url = (
                 f"https://maps.googleapis.com/maps/api/streetview"
-                f"?size=600x400"
+                f"?size=800x600"
                 f"&location={candidate.latitude},{candidate.longitude}"
                 f"&fov=90&pitch=0"
                 f"&key={api_key}"
@@ -537,7 +572,9 @@ Return ONLY the JSON array, no other text."""
             if candidates:
                 logger.info("=" * 50)
                 logger.info("PHOTO FETCH: Starting for candidates", count=len(candidates))
-                await self._fetch_photos_for_candidates(candidates)
+                # Prefer interior photos for interior scenes
+                prefer_interior = requirement.constraints.interior_exterior in ("interior", "both")
+                await self._fetch_photos_for_candidates(candidates, prefer_interior=prefer_interior)
                 logger.info("PHOTO FETCH: Complete")
                 for c in candidates:
                     logger.info("Candidate photos", venue=c.venue_name, photo_count=len(c.photo_urls), has_photos=bool(c.photo_urls))
@@ -598,30 +635,48 @@ Return ONLY the JSON array, no other text."""
 
     # ─── Visual Verification Methods (using Perplexity Sonar) ─────────
 
-    def _build_visual_verification_prompt(self, vibe: Vibe) -> str:
+    def _build_visual_verification_prompt(
+        self,
+        vibe: Vibe,
+        interior_exterior: str = "interior",
+    ) -> str:
         """Build prompt for visual vibe verification."""
+        location_type = {
+            "interior": "This should be an INTERIOR shot showing indoor spaces.",
+            "exterior": "This should be an EXTERIOR shot showing the outside/facade.",
+            "both": "This can be either interior or exterior.",
+        }.get(interior_exterior, "")
+
         return f"""Analyze this location photo for film production scouting.
 
 **Required Vibe:** {vibe.primary.value}
 **Descriptors:** {', '.join(vibe.descriptors)}
 {f"**Secondary Vibe:** {vibe.secondary.value}" if vibe.secondary else ""}
+**Location Type Required:** {interior_exterior.upper()}
+{location_type}
 
 Evaluate how well this location matches the required aesthetic for filming.
+
+IMPORTANT considerations:
+1. Does this photo show an INTERIOR or EXTERIOR view?
+2. Does the aesthetic match the required vibe?
+3. Are there practical concerns for filming (visible branding, modern elements that break period, etc.)?
 
 Respond with ONLY a JSON object (no markdown, no extra text):
 {{
     "vibe_match_score": 0.85,
+    "is_interior": true,
     "detected_features": ["exposed brick walls", "high industrial ceilings", "concrete floors"],
     "concerns": ["modern light fixtures visible", "too renovated"],
     "summary": "Strong industrial aesthetic with authentic warehouse features. Minor concern about modern renovations."
 }}
 
 Rules for scoring:
-- 0.9-1.0: Perfect match, exactly the vibe needed
+- 0.9-1.0: Perfect match, exactly the vibe needed AND correct interior/exterior type
 - 0.7-0.89: Good match, minor adjustments needed
-- 0.5-0.69: Partial match, significant set dressing required
+- 0.5-0.69: Partial match, significant set dressing required OR wrong interior/exterior type
 - 0.3-0.49: Poor match, major concerns
-- 0.0-0.29: Does not match the required vibe"""
+- 0.0-0.29: Does not match the required vibe at all"""
 
     async def _fetch_image_as_base64(self, image_url: str) -> tuple[str, str] | None:
         """Fetch image and convert to base64 data URI."""
@@ -692,12 +747,19 @@ Rules for scoring:
         candidate: LocationCandidate,
         vibe: Vibe,
         image_url: str | None = None,
+        interior_exterior: str = "interior",
     ) -> LocationCandidate:
         """
         Verify a location's visual vibe using Perplexity Sonar vision.
 
         Analyzes the location photo against the required vibe and updates
         the candidate with visual verification results.
+
+        Args:
+            candidate: The location candidate to verify
+            vibe: Required vibe for the scene
+            image_url: Optional specific image URL to analyze
+            interior_exterior: "interior", "exterior", or "both"
         """
         # Use provided URL or first photo from candidate
         photo_url = image_url or (candidate.photo_urls[0] if candidate.photo_urls else None)
@@ -714,8 +776,8 @@ Rules for scoring:
         image_data_uri, _ = result
 
         try:
-            # Build the prompt
-            prompt = self._build_visual_verification_prompt(vibe)
+            # Build the prompt with interior/exterior context
+            prompt = self._build_visual_verification_prompt(vibe, interior_exterior)
 
             # Call Perplexity Sonar with the image
             response_text = await self._call_perplexity_vision(image_data_uri, prompt)
@@ -762,16 +824,24 @@ Rules for scoring:
         self,
         candidates: list[LocationCandidate],
         vibe: Vibe,
+        interior_exterior: str = "interior",
     ) -> list[LocationCandidate]:
         """
         Verify multiple candidates' visual vibes.
 
         Returns candidates sorted by updated match score.
+
+        Args:
+            candidates: List of candidates to verify
+            vibe: Required vibe for the scene
+            interior_exterior: "interior", "exterior", or "both"
         """
         verified = []
 
         for candidate in candidates:
-            verified_candidate = await self.verify_visual_vibe(candidate, vibe)
+            verified_candidate = await self.verify_visual_vibe(
+                candidate, vibe, interior_exterior=interior_exterior
+            )
             verified.append(verified_candidate)
 
         # Re-sort by updated match score
@@ -807,11 +877,13 @@ Rules for scoring:
                     "Starting visual verification",
                     count=len(candidates_with_photos),
                     scene=requirement.scene_header,
+                    interior_exterior=requirement.constraints.interior_exterior,
                 )
 
                 result.candidates = await self.verify_candidates_visual(
                     result.candidates,
                     requirement.vibe,
+                    interior_exterior=requirement.constraints.interior_exterior,
                 )
 
                 # Update warnings

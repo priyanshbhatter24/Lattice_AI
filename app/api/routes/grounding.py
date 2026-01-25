@@ -55,6 +55,8 @@ class GroundScenesRequest(BaseModel):
     max_results: int = 10
     save_to_db: bool = True
     parallel_workers: int = 5  # Number of parallel workers
+    verify_visuals: bool = True  # Enable visual vibe verification
+    min_score_threshold: float = 0.4  # Minimum match score to accept candidate
 
 
 class GroundingProgress(BaseModel):
@@ -203,16 +205,43 @@ async def ground_scenes_stream(
                     requirement = _scene_to_requirement(scene, request.target_city, request.max_results)
                     result = await agent.find_and_verify_locations(
                         requirement,
-                        verify_visuals=False,
+                        verify_visuals=request.verify_visuals,
                         save_to_db=False,
                     )
 
-                    # Send each candidate
+                    # Filter and send candidates - reject low-scoring ones
+                    accepted_candidates = []
                     for candidate in result.candidates:
-                        await result_queue.put(("candidate", {
-                            "scene_id": scene_id,
-                            "candidate": _candidate_to_dict(candidate),
-                        }))
+                        if candidate.match_score >= request.min_score_threshold:
+                            # Candidate accepted
+                            accepted_candidates.append(candidate)
+                            await result_queue.put(("candidate", {
+                                "scene_id": scene_id,
+                                "candidate": _candidate_to_dict(candidate),
+                            }))
+                        else:
+                            # Candidate rejected - send rejection event
+                            rejection_reasons = []
+                            if candidate.visual_vibe_score is not None and candidate.visual_vibe_score < 0.5:
+                                rejection_reasons.append(f"Visual vibe mismatch ({int(candidate.visual_vibe_score * 100)}%)")
+                            if candidate.visual_concerns:
+                                rejection_reasons.append(f"Visual concerns: {', '.join(candidate.visual_concerns[:2])}")
+                            if not candidate.phone_number:
+                                rejection_reasons.append("No phone number")
+                            if len(candidate.red_flags) > 2:
+                                rejection_reasons.append(f"{len(candidate.red_flags)} red flags")
+                            if not rejection_reasons:
+                                rejection_reasons.append(f"Low match score ({int(candidate.match_score * 100)}%)")
+
+                            await result_queue.put(("rejected", {
+                                "scene_id": scene_id,
+                                "candidate": _candidate_to_dict(candidate),
+                                "reasons": rejection_reasons,
+                            }))
+
+                    # Update result with only accepted candidates
+                    result.candidates = accepted_candidates
+                    result.filtered_count = len(result.candidates) - len(accepted_candidates)
 
                     # Save to DB if requested
                     if request.save_to_db and result.candidates:
@@ -323,7 +352,7 @@ async def ground_single_scene(
 
     result = await agent.find_and_verify_locations(
         requirement,
-        verify_visuals=False,
+        verify_visuals=True,
         save_to_db=False,
     )
 

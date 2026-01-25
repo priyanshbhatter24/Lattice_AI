@@ -50,8 +50,12 @@ export default function Home() {
   const [currentGroundingScene, setCurrentGroundingScene] = useState("");
   const [venuesByScene, setVenuesByScene] = useState<Map<string, LocationCandidate>>(new Map());
   const [allVenues, setAllVenues] = useState<LocationCandidate[]>([]); // All discovered venues
+  const [rejectedVenues, setRejectedVenues] = useState<{ venue: LocationCandidate; reasons: string[] }[]>([]); // Rejected venues with reasons
   const [latestVenueId, setLatestVenueId] = useState<string | null>(null); // Most recent venue ID
+  const [latestRejectedId, setLatestRejectedId] = useState<string | null>(null); // Most recent rejected venue ID
   const [consideringVenue, setConsideringVenue] = useState<LocationCandidate | null>(null); // Currently evaluating
+  const [isRejecting, setIsRejecting] = useState(false); // Is the current venue being rejected?
+  const [rejectingReasons, setRejectingReasons] = useState<string[]>([]); // Reasons for current rejection
   const [selectedVenue, setSelectedVenue] = useState<LocationCandidate | null>(null); // Venue to show in modal
   const [savedProjectId, setSavedProjectId] = useState<string | null>(null);
   const [savedSceneIds, setSavedSceneIds] = useState<string[]>([]);
@@ -106,8 +110,12 @@ export default function Home() {
     setState("grounding");
     setVenuesByScene(new Map());
     setAllVenues([]);
+    setRejectedVenues([]);
     setLatestVenueId(null);
+    setLatestRejectedId(null);
     setConsideringVenue(null);
+    setIsRejecting(false);
+    setRejectingReasons([]);
     setGroundingProgress({ processed: 0, total: selectedLocations.length, percent: 0 });
 
     try {
@@ -178,10 +186,12 @@ export default function Home() {
               // Map the DB scene_id back to the original analysis scene_id
               const originalSceneId = dbIdToOriginalId.get(event.data.scene_id) || event.data.scene_id;
 
-              // Show venue in "considering" state briefly
+              // Show venue in "considering" state briefly (accepted)
               setConsideringVenue(candidate);
+              setIsRejecting(false);
+              setRejectingReasons([]);
 
-              // After a brief delay, move to accepted (simulates evaluation)
+              // After a brief delay, move to accepted
               setTimeout(() => {
                 // Update venuesByScene (keeps last venue per scene for backwards compat)
                 setVenuesByScene(prev => {
@@ -195,6 +205,35 @@ export default function Home() {
                 setLatestVenueId(candidate.id);
                 setConsideringVenue(null);
               }, 800); // Show "considering" for 800ms
+              break;
+            case "rejected":
+              // Handle rejected candidate - show briefly in considering state then move to rejected
+              const rejectedCandidate = event.data.candidate;
+              const rejectionReasons = event.data.reasons || ["Did not meet requirements"];
+
+              console.log("[FindVenues] Candidate rejected:", {
+                venue: rejectedCandidate.venue_name,
+                reasons: rejectionReasons,
+                match_score: rejectedCandidate.match_score,
+                visual_score: rejectedCandidate.visual_vibe_score,
+              });
+
+              // Show in considering state with rejection indication
+              setConsideringVenue(rejectedCandidate);
+              setIsRejecting(true);
+              setRejectingReasons(rejectionReasons);
+
+              setTimeout(() => {
+                // Add to rejected venues (prepend for top-to-bottom flow)
+                setRejectedVenues(prev => [
+                  { venue: rejectedCandidate, reasons: rejectionReasons },
+                  ...prev,
+                ]);
+                setLatestRejectedId(rejectedCandidate.id);
+                setConsideringVenue(null);
+                setIsRejecting(false);
+                setRejectingReasons([]);
+              }, 800);
               break;
             case "progress":
               setGroundingProgress({
@@ -990,67 +1029,105 @@ export default function Home() {
             {consideringVenue && (
               <div
                 className="paper-card mb-4 p-4 animate-fade-in"
-                style={{ borderColor: "var(--color-warning)", borderWidth: "2px" }}
+                style={{
+                  borderColor: isRejecting ? "var(--color-error)" : "var(--color-warning)",
+                  borderWidth: "2px",
+                  background: isRejecting ? "rgba(155, 59, 59, 0.05)" : undefined,
+                }}
               >
                 <div className="flex items-center gap-4">
-                  {/* Spinner */}
+                  {/* Status Icon */}
                   <div
                     className="h-12 w-12 rounded-lg flex items-center justify-center flex-shrink-0"
-                    style={{ background: "var(--color-warning)", opacity: 0.15 }}
+                    style={{
+                      background: isRejecting ? "var(--color-error)" : "var(--color-warning)",
+                      opacity: isRejecting ? 1 : 0.15,
+                    }}
                   >
-                    <div
-                      className="h-6 w-6 rounded-full border-2 animate-spin"
-                      style={{ borderColor: "var(--color-warning)", borderTopColor: "transparent" }}
-                    />
+                    {isRejecting ? (
+                      <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="white" strokeWidth={2.5}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    ) : (
+                      <div
+                        className="h-6 w-6 rounded-full border-2 animate-spin"
+                        style={{ borderColor: "var(--color-warning)", borderTopColor: "transparent" }}
+                      />
+                    )}
                   </div>
 
                   {/* Venue info */}
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1">
-                      <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--color-warning)" }}>
-                        Evaluating
+                      <span
+                        className="text-xs font-semibold uppercase tracking-wider"
+                        style={{ color: isRejecting ? "var(--color-error)" : "var(--color-warning)" }}
+                      >
+                        {isRejecting ? "Not a match" : "Evaluating"}
                       </span>
-                      <div className="flex gap-0.5">
-                        <div className="h-1 w-1 rounded-full animate-bounce" style={{ background: "var(--color-warning)" }} />
-                        <div className="h-1 w-1 rounded-full animate-bounce" style={{ background: "var(--color-warning)", animationDelay: "150ms" }} />
-                        <div className="h-1 w-1 rounded-full animate-bounce" style={{ background: "var(--color-warning)", animationDelay: "300ms" }} />
-                      </div>
+                      {!isRejecting && (
+                        <div className="flex gap-0.5">
+                          <div className="h-1 w-1 rounded-full animate-bounce" style={{ background: "var(--color-warning)" }} />
+                          <div className="h-1 w-1 rounded-full animate-bounce" style={{ background: "var(--color-warning)", animationDelay: "150ms" }} />
+                          <div className="h-1 w-1 rounded-full animate-bounce" style={{ background: "var(--color-warning)", animationDelay: "300ms" }} />
+                        </div>
+                      )}
                     </div>
                     <h4 className="font-semibold truncate" style={{ color: "var(--color-text)" }}>
                       {consideringVenue.venue_name}
                     </h4>
-                    <p className="text-xs truncate" style={{ color: "var(--color-text-muted)" }}>
-                      {consideringVenue.formatted_address}
-                    </p>
+                    {isRejecting && rejectingReasons.length > 0 ? (
+                      <p className="text-xs truncate" style={{ color: "var(--color-error)" }}>
+                        {rejectingReasons[0]}
+                      </p>
+                    ) : (
+                      <p className="text-xs truncate" style={{ color: "var(--color-text-muted)" }}>
+                        {consideringVenue.formatted_address}
+                      </p>
+                    )}
                   </div>
 
                   {/* Score preview */}
                   <div className="flex flex-col items-end flex-shrink-0">
-                    <span className="text-2xl font-bold" style={{ color: "var(--color-text)" }}>
+                    <span
+                      className="text-2xl font-bold"
+                      style={{ color: isRejecting ? "var(--color-error)" : "var(--color-text)" }}
+                    >
                       {Math.round(consideringVenue.match_score * 100)}%
                     </span>
                     <span className="text-xs" style={{ color: "var(--color-text-muted)" }}>
-                      match score
+                      {isRejecting ? "too low" : "match score"}
                     </span>
                   </div>
                 </div>
               </div>
             )}
 
-            {/* Streaming venue grid */}
-            {allVenues.length > 0 ? (
-              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-                {allVenues.map((venue, index) => (
-                  <VenueDiscoveryCard
-                    key={venue.id}
-                    venue={venue}
-                    index={index}
-                    isLatest={venue.id === latestVenueId}
-                    onClick={() => setSelectedVenue(venue)}
-                  />
-                ))}
-              </div>
-            ) : (
+            {/* Streaming venue grid - Accepted */}
+            {allVenues.length > 0 && (
+              <>
+                <div className="mb-3 flex items-center gap-2">
+                  <div className="h-2 w-2 rounded-full" style={{ background: "var(--color-success)" }} />
+                  <span className="text-sm font-medium" style={{ color: "var(--color-text-secondary)" }}>
+                    Accepted ({allVenues.length})
+                  </span>
+                </div>
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                  {allVenues.map((venue, index) => (
+                    <VenueDiscoveryCard
+                      key={venue.id}
+                      venue={venue}
+                      index={index}
+                      isLatest={venue.id === latestVenueId}
+                      onClick={() => setSelectedVenue(venue)}
+                    />
+                  ))}
+                </div>
+              </>
+            )}
+
+            {/* Empty state when no venues yet */}
+            {allVenues.length === 0 && rejectedVenues.length === 0 && (
               <div className="flex flex-col items-center justify-center py-12">
                 <div className="flex items-center gap-2 mb-3">
                   <div className="h-3 w-3 rounded-full animate-bounce" style={{ background: "var(--color-accent)" }} />
@@ -1060,6 +1137,28 @@ export default function Home() {
                 <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>
                   Searching for matching venues...
                 </p>
+              </div>
+            )}
+
+            {/* Rejected venues section */}
+            {rejectedVenues.length > 0 && (
+              <div className="mt-8">
+                <div className="mb-3 flex items-center gap-2">
+                  <div className="h-2 w-2 rounded-full" style={{ background: "var(--color-error)" }} />
+                  <span className="text-sm font-medium" style={{ color: "var(--color-text-muted)" }}>
+                    Didn&apos;t make the cut ({rejectedVenues.length})
+                  </span>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5">
+                  {rejectedVenues.map(({ venue, reasons }, index) => (
+                    <RejectedVenueCard
+                      key={venue.id}
+                      venue={venue}
+                      reasons={reasons}
+                      isLatest={venue.id === latestRejectedId}
+                    />
+                  ))}
+                </div>
               </div>
             )}
           </div>
@@ -1089,6 +1188,9 @@ export default function Home() {
                     </h2>
                     <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>
                       Found <strong style={{ color: "var(--color-success)" }}>{allVenues.length}</strong> real venues for {locations.filter(l => selectedLocationIds.has(l.scene_id)).length} scenes
+                      {rejectedVenues.length > 0 && (
+                        <span style={{ color: "var(--color-text-subtle)" }}> ({rejectedVenues.length} didn&apos;t make the cut)</span>
+                      )}
                     </p>
                   </div>
                 </div>
@@ -1130,6 +1232,35 @@ export default function Home() {
                 </div>
               ))}
             </div>
+
+            {/* Rejected venues in final view */}
+            {rejectedVenues.length > 0 && (
+              <div className="mt-8 pt-6" style={{ borderTop: "1px solid var(--color-border-subtle)" }}>
+                <div className="mb-4 flex items-center gap-2">
+                  <svg className="h-4 w-4" style={{ color: "var(--color-text-subtle)" }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                  <h2 className="text-sm font-medium" style={{ color: "var(--color-text-muted)" }}>
+                    Didn&apos;t Make the Cut ({rejectedVenues.length})
+                  </h2>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6">
+                  {rejectedVenues.map(({ venue, reasons }, index) => (
+                    <div
+                      key={venue.id}
+                      className="animate-fade-in"
+                      style={{ animationDelay: `${Math.min(index * 20, 200)}ms` }}
+                    >
+                      <RejectedVenueCard
+                        venue={venue}
+                        reasons={reasons}
+                        isLatest={false}
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -2486,6 +2617,71 @@ function VenueDiscoveryCard({
           </div>
           {/* Scene reference could go here */}
         </div>
+      </div>
+    </div>
+  );
+}
+
+// Rejected venue card - smaller, subdued style
+function RejectedVenueCard({
+  venue,
+  reasons,
+  isLatest,
+}: {
+  venue: LocationCandidate;
+  reasons: string[];
+  isLatest: boolean;
+}) {
+  const [hasAnimated, setHasAnimated] = useState(false);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setHasAnimated(true), 500);
+    return () => clearTimeout(timer);
+  }, []);
+
+  return (
+    <div
+      className={`paper-card overflow-hidden rounded-lg opacity-60 ${!hasAnimated ? "animate-venue-pop" : ""}`}
+      style={{
+        borderColor: isLatest ? "var(--color-error)" : "var(--color-border-subtle)",
+        height: "100px",
+      }}
+    >
+      <div className="p-3 h-full flex flex-col">
+        {/* Header with X icon */}
+        <div className="flex items-start gap-2">
+          <div
+            className="h-5 w-5 rounded-full flex items-center justify-center flex-shrink-0"
+            style={{ background: "var(--color-error)" }}
+          >
+            <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="white" strokeWidth={3}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </div>
+          <div className="flex-1 min-w-0">
+            <h4
+              className="text-xs font-semibold leading-tight truncate"
+              style={{ color: "var(--color-text-muted)" }}
+              title={venue.venue_name}
+            >
+              {venue.venue_name}
+            </h4>
+            <span
+              className="text-[10px] font-medium"
+              style={{ color: "var(--color-error)" }}
+            >
+              {Math.round(venue.match_score * 100)}% match
+            </span>
+          </div>
+        </div>
+
+        {/* Reason */}
+        <p
+          className="mt-auto text-[10px] line-clamp-2"
+          style={{ color: "var(--color-text-subtle)" }}
+        >
+          {reasons[0]}
+        </p>
       </div>
     </div>
   );
