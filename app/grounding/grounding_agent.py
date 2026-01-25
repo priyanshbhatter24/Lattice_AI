@@ -3,6 +3,9 @@ Stage 2: Grounding Agent
 
 Uses Google GenAI with Google Maps grounding to find real-world locations
 that match the vibe and constraints from script analysis.
+
+Also performs visual verification using Gemini 3 Flash vision to ensure
+location photos match the required aesthetic.
 """
 
 import json
@@ -10,6 +13,7 @@ import re
 import time
 from typing import Any
 
+import httpx
 import structlog
 from google import genai
 from google.genai import types
@@ -17,6 +21,7 @@ from google.genai.types import (
     GenerateContentConfig,
     GoogleMaps,
     HttpOptions,
+    Part,
     Tool,
 )
 
@@ -27,6 +32,7 @@ from app.grounding.models import (
     LocationCandidate,
     LocationRequirement,
     VapiCallStatus,
+    Vibe,
     VibeCategory,
 )
 
@@ -421,3 +427,178 @@ Return ONLY the JSON array, no other text."""
             )
 
         return results
+
+    # ─── Visual Verification Methods ──────────────────────────────────
+
+    def _build_visual_verification_prompt(self, vibe: Vibe) -> str:
+        """Build prompt for visual vibe verification."""
+        return f"""Analyze this location photo for film production scouting.
+
+**Required Vibe:** {vibe.primary.value}
+**Descriptors:** {', '.join(vibe.descriptors)}
+{f"**Secondary Vibe:** {vibe.secondary.value}" if vibe.secondary else ""}
+
+Evaluate how well this location matches the required aesthetic for filming.
+
+Respond with ONLY a JSON object (no markdown, no extra text):
+{{
+    "vibe_match_score": 0.85,
+    "detected_features": ["exposed brick walls", "high industrial ceilings", "concrete floors"],
+    "concerns": ["modern light fixtures visible", "too renovated"],
+    "summary": "Strong industrial aesthetic with authentic warehouse features. Minor concern about modern renovations."
+}}
+
+Rules for scoring:
+- 0.9-1.0: Perfect match, exactly the vibe needed
+- 0.7-0.89: Good match, minor adjustments needed
+- 0.5-0.69: Partial match, significant set dressing required
+- 0.3-0.49: Poor match, major concerns
+- 0.0-0.29: Does not match the required vibe"""
+
+    async def _fetch_image_bytes(self, image_url: str) -> bytes | None:
+        """Fetch image bytes from URL."""
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(image_url, timeout=10.0)
+                response.raise_for_status()
+                return response.content
+        except Exception as e:
+            logger.warning("Failed to fetch image", url=image_url, error=str(e))
+            return None
+
+    async def verify_visual_vibe(
+        self,
+        candidate: LocationCandidate,
+        vibe: Vibe,
+        image_url: str | None = None,
+    ) -> LocationCandidate:
+        """
+        Verify a location's visual vibe using Gemini 3 Flash vision.
+
+        Analyzes the location photo against the required vibe and updates
+        the candidate with visual verification results.
+        """
+        # Use provided URL or first photo from candidate
+        photo_url = image_url or (candidate.photo_urls[0] if candidate.photo_urls else None)
+
+        if not photo_url:
+            logger.warning("No photo available for visual verification", venue=candidate.venue_name)
+            return candidate
+
+        # Fetch the image
+        image_bytes = await self._fetch_image_bytes(photo_url)
+        if not image_bytes:
+            return candidate
+
+        try:
+            # Build the prompt
+            prompt = self._build_visual_verification_prompt(vibe)
+
+            # Call Gemini with the image
+            response = self.client.models.generate_content(
+                model=self.config.model_name,
+                contents=[
+                    Part.from_bytes(data=image_bytes, mime_type="image/jpeg"),
+                    prompt,
+                ],
+            )
+
+            # Parse response
+            response_text = response.text.strip()
+
+            # Extract JSON from response
+            json_match = re.search(r'\{[\s\S]*\}', response_text)
+            if json_match:
+                result = json.loads(json_match.group())
+
+                candidate.visual_vibe_score = float(result.get("vibe_match_score", 0))
+                candidate.visual_features_detected = result.get("detected_features", [])
+                candidate.visual_concerns = result.get("concerns", [])
+                candidate.visual_analysis_summary = result.get("summary", "")
+
+                # Add visual concerns to red flags
+                for concern in candidate.visual_concerns:
+                    if concern not in candidate.red_flags:
+                        candidate.red_flags.append(f"Visual: {concern}")
+
+                # Update match score (blend with visual score)
+                if candidate.visual_vibe_score is not None:
+                    # Weight: 60% original score, 40% visual score
+                    candidate.match_score = (
+                        candidate.match_score * 0.6 +
+                        candidate.visual_vibe_score * 0.4
+                    )
+
+                logger.info(
+                    "Visual verification complete",
+                    venue=candidate.venue_name,
+                    visual_score=candidate.visual_vibe_score,
+                    features=len(candidate.visual_features_detected),
+                )
+
+        except Exception as e:
+            logger.error("Visual verification failed", venue=candidate.venue_name, error=str(e))
+
+        return candidate
+
+    async def verify_candidates_visual(
+        self,
+        candidates: list[LocationCandidate],
+        vibe: Vibe,
+    ) -> list[LocationCandidate]:
+        """
+        Verify multiple candidates' visual vibes.
+
+        Returns candidates sorted by updated match score.
+        """
+        verified = []
+
+        for candidate in candidates:
+            verified_candidate = await self.verify_visual_vibe(candidate, vibe)
+            verified.append(verified_candidate)
+
+        # Re-sort by updated match score
+        verified.sort(key=lambda c: c.match_score, reverse=True)
+
+        return verified
+
+    async def find_and_verify_locations(
+        self,
+        requirement: LocationRequirement,
+        verify_visuals: bool = True,
+    ) -> GroundingResult:
+        """
+        Find locations and optionally verify their visual vibe.
+
+        This is the main entry point that combines grounding + visual verification.
+        """
+        # First, find locations via Google Maps grounding
+        result = await self.find_locations(requirement)
+
+        # Then verify visuals if enabled and we have candidates with photos
+        if verify_visuals and result.candidates:
+            candidates_with_photos = [c for c in result.candidates if c.photo_urls]
+
+            if candidates_with_photos:
+                logger.info(
+                    "Starting visual verification",
+                    count=len(candidates_with_photos),
+                    scene=requirement.scene_header,
+                )
+
+                result.candidates = await self.verify_candidates_visual(
+                    result.candidates,
+                    requirement.vibe,
+                )
+
+                # Update warnings
+                low_visual_count = sum(
+                    1 for c in result.candidates
+                    if c.visual_vibe_score is not None and c.visual_vibe_score < 0.5
+                )
+                if low_visual_count > 0:
+                    result.warnings.append(
+                        f"{low_visual_count} locations have low visual vibe match (<0.5)"
+                    )
+
+        return result

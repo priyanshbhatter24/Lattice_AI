@@ -4,7 +4,9 @@ This document describes how to test the Stage 2 Grounding module independently.
 
 ## Overview
 
-Stage 2 takes location requirements from Stage 1 (Script Analysis) and finds real-world locations using Google GenAI with Google Maps grounding.
+Stage 2 takes location requirements from Stage 1 (Script Analysis) and finds real-world locations using:
+- **Google Maps grounding** (via Gemini 3 Flash) for location discovery
+- **Visual verification** (via Gemini 3 Flash vision) to check if photos match the required vibe
 
 ## Prerequisites
 
@@ -185,6 +187,9 @@ Time: 3.45s
       Match Score: 0.85
       Status: discovered
       Why: Industrial warehouse with 25ft ceilings, exposed brick walls...
+      Visual Vibe Score: 0.88
+      Detected Features: exposed brick, industrial ceilings, concrete floor
+      Visual Summary: Strong industrial aesthetic with authentic warehouse features...
       Concerns: Limited street parking
 
   [2] Vernon Industrial Space
@@ -193,8 +198,33 @@ Time: 3.45s
       Rating: 4.2 (45 reviews)
       Match Score: 0.60
       Status: human_review
+      Visual Vibe Score: 0.72
       ...
 ```
+
+## Visual Verification
+
+Stage 2 includes visual verification using Gemini 3 Flash vision. For each location with photos:
+
+1. Fetches the location photo from Google Places
+2. Analyzes the image against the required vibe (e.g., "industrial", "gritty")
+3. Returns:
+   - `visual_vibe_score`: 0.0-1.0 match score
+   - `visual_features_detected`: Features found in the image
+   - `visual_concerns`: Potential issues (e.g., "too renovated")
+   - `visual_analysis_summary`: Brief analysis
+
+The final `match_score` is a blend: **60% grounding score + 40% visual score**
+
+### Visual Score Interpretation
+
+| Score | Meaning |
+|-------|---------|
+| 0.9-1.0 | Perfect match - exactly the vibe needed |
+| 0.7-0.89 | Good match - minor adjustments needed |
+| 0.5-0.69 | Partial match - significant set dressing required |
+| 0.3-0.49 | Poor match - major concerns |
+| 0.0-0.29 | Does not match the required vibe |
 
 ## Output Files
 

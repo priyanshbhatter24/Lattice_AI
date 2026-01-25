@@ -154,6 +154,12 @@ class LocationCandidate(BaseModel):
     # Why this location was selected
     match_reasoning: str = ""
 
+    # Visual verification (from Gemini vision analysis)
+    visual_vibe_score: float | None = Field(ge=0.0, le=1.0, default=None)
+    visual_features_detected: list[str] = Field(default_factory=list)
+    visual_concerns: list[str] = Field(default_factory=list)
+    visual_analysis_summary: str | None = None
+
     # ─── Vapi Call Data (initialized for Stage 3) ─────────
     vapi_call_status: VapiCallStatus = VapiCallStatus.NOT_INITIATED
     vapi_call_id: str | None = None

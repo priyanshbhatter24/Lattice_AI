@@ -67,6 +67,14 @@ def print_candidate(candidate: LocationCandidate, index: int) -> None:
     if candidate.match_reasoning:
         print(f"      Why: {candidate.match_reasoning[:100]}...")
 
+    # Visual verification results
+    if candidate.visual_vibe_score is not None:
+        print(f"      Visual Vibe Score: {candidate.visual_vibe_score:.2f}")
+        if candidate.visual_features_detected:
+            print(f"      Detected Features: {', '.join(candidate.visual_features_detected[:3])}")
+        if candidate.visual_analysis_summary:
+            print(f"      Visual Summary: {candidate.visual_analysis_summary[:80]}...")
+
     if candidate.red_flags:
         print(f"      Concerns: {', '.join(candidate.red_flags[:3])}")
 
@@ -172,10 +180,25 @@ async def test_all_scenes() -> None:
     )
     without_phone = total_candidates - with_phone
 
+    # Visual verification stats
+    visually_verified = sum(
+        1 for r in results
+        for c in r.candidates
+        if c.visual_vibe_score is not None
+    )
+    high_visual_match = sum(
+        1 for r in results
+        for c in r.candidates
+        if c.visual_vibe_score is not None and c.visual_vibe_score >= 0.7
+    )
+
     print(f"\nScenes processed: {len(results)}")
     print(f"Total candidates found: {total_candidates}")
     print(f"  - With phone number: {with_phone}")
     print(f"  - Without phone (needs manual): {without_phone}")
+    if visually_verified > 0:
+        print(f"  - Visually verified: {visually_verified}")
+        print(f"  - High visual match (>=0.7): {high_visual_match}")
     print(f"Total errors: {total_errors}")
     print(f"Total processing time: {total_time:.2f}s")
 

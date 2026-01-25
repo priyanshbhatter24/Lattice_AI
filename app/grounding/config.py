@@ -23,7 +23,7 @@ class GroundingConfig(BaseSettings):
     google_application_credentials: str = ""  # Optional: path to service account JSON
 
     # Model settings
-    model_name: str = "gemini-2.0-flash"
+    model_name: str = "gemini-3-flash-preview"
     api_version: str = "v1"
 
     # Default search settings
