@@ -346,13 +346,19 @@ export async function listLocations(params: {
   if (params.sceneId) query.set("scene_id", params.sceneId);
   if (params.limit) query.set("limit", params.limit.toString());
 
-  const response = await fetch(`${API_BASE}/api/locations?${query}`);
+  const authHeaders = await getAuthHeaders();
+  const response = await fetch(`${API_BASE}/api/locations?${query}`, {
+    headers: authHeaders,
+  });
   if (!response.ok) throw new Error("Failed to fetch locations");
   return response.json();
 }
 
 export async function getLocation(candidateId: string): Promise<LocationCandidate> {
-  const response = await fetch(`${API_BASE}/api/locations/${candidateId}`);
+  const authHeaders = await getAuthHeaders();
+  const response = await fetch(`${API_BASE}/api/locations/${candidateId}`, {
+    headers: authHeaders,
+  });
   if (!response.ok) throw new Error("Location not found");
   return response.json();
 }
@@ -360,9 +366,10 @@ export async function getLocation(candidateId: string): Promise<LocationCandidat
 export async function createMockLocation(
   data: CreateLocationRequest
 ): Promise<LocationCandidate> {
+  const authHeaders = await getAuthHeaders();
   const response = await fetch(`${API_BASE}/api/locations`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...authHeaders },
     body: JSON.stringify(data),
   });
   if (!response.ok) {
@@ -376,9 +383,10 @@ export async function approveLocation(
   candidateId: string,
   approvedBy: string
 ): Promise<LocationCandidate> {
+  const authHeaders = await getAuthHeaders();
   const response = await fetch(
     `${API_BASE}/api/locations/${candidateId}/approve?approved_by=${encodeURIComponent(approvedBy)}`,
-    { method: "PATCH" }
+    { method: "PATCH", headers: authHeaders }
   );
   if (!response.ok) throw new Error("Failed to approve location");
   return response.json();
@@ -388,9 +396,10 @@ export async function rejectLocation(
   candidateId: string,
   reason: string
 ): Promise<LocationCandidate> {
+  const authHeaders = await getAuthHeaders();
   const response = await fetch(
     `${API_BASE}/api/locations/${candidateId}/reject?reason=${encodeURIComponent(reason)}`,
-    { method: "PATCH" }
+    { method: "PATCH", headers: authHeaders }
   );
   if (!response.ok) throw new Error("Failed to reject location");
   return response.json();
@@ -401,9 +410,10 @@ export async function rejectLocation(
 // ══════════════════════════════════════════════════════════
 
 export async function triggerCall(candidateId: string): Promise<CallResponse> {
+  const authHeaders = await getAuthHeaders();
   const response = await fetch(`${API_BASE}/api/calls/trigger`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...authHeaders },
     body: JSON.stringify({ candidate_id: candidateId }),
   });
   if (!response.ok) {
@@ -417,9 +427,10 @@ export async function triggerBatchCalls(
   candidateIds: string[],
   maxConcurrent?: number
 ): Promise<BatchResponse> {
+  const authHeaders = await getAuthHeaders();
   const response = await fetch(`${API_BASE}/api/calls/batch`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...authHeaders },
     body: JSON.stringify({
       candidate_ids: candidateIds,
       max_concurrent: maxConcurrent,
@@ -433,7 +444,10 @@ export async function triggerBatchCalls(
 }
 
 export async function getCallStatus(vapiCallId: string): Promise<CallStatusResponse> {
-  const response = await fetch(`${API_BASE}/api/calls/${vapiCallId}`);
+  const authHeaders = await getAuthHeaders();
+  const response = await fetch(`${API_BASE}/api/calls/${vapiCallId}`, {
+    headers: authHeaders,
+  });
   if (!response.ok) throw new Error("Failed to get call status");
   return response.json();
 }
@@ -446,7 +460,10 @@ export async function getCallStatus(vapiCallId: string): Promise<CallStatusRespo
  * Get all scenes for a project that can be grounded.
  */
 export async function getGroundableScenes(projectId: string): Promise<GroundableScene[]> {
-  const response = await fetch(`${API_BASE}/api/grounding/scenes/${projectId}`);
+  const authHeaders = await getAuthHeaders();
+  const response = await fetch(`${API_BASE}/api/grounding/scenes/${projectId}`, {
+    headers: authHeaders,
+  });
   if (!response.ok) throw new Error("Failed to fetch scenes");
   return response.json();
 }
@@ -465,20 +482,23 @@ export function groundScenesWithCallback(
 ): () => void {
   const abortController = new AbortController();
 
-  fetch(`${API_BASE}/api/grounding/ground`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "text/event-stream",
-    },
-    body: JSON.stringify({
-      scene_ids: sceneIds,
-      target_city: targetCity,
-      max_results: maxResults,
-      save_to_db: saveToDb,
-    }),
-    signal: abortController.signal,
-  })
+  // Get auth headers asynchronously and then start the request
+  getAuthHeaders().then((authHeaders) => {
+    fetch(`${API_BASE}/api/grounding/ground`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "text/event-stream",
+        ...authHeaders,
+      },
+      body: JSON.stringify({
+        scene_ids: sceneIds,
+        target_city: targetCity,
+        max_results: maxResults,
+        save_to_db: saveToDb,
+      }),
+      signal: abortController.signal,
+    })
     .then(async (response) => {
       if (!response.ok) {
         throw new Error(`Grounding failed: ${response.statusText}`);
@@ -533,6 +553,7 @@ export function groundScenesWithCallback(
       }
       onError(error);
     });
+  });
 
   return () => {
     abortController.abort();

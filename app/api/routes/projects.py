@@ -33,6 +33,7 @@ class CreateProjectRequest(BaseModel):
     crew_size: int = 20
     filming_start_date: str | None = None
     filming_end_date: str | None = None
+    script_path: str | None = None
 
 
 class CreateSceneRequest(BaseModel):
@@ -92,6 +93,7 @@ async def create_project(
         crew_size=request.crew_size,
         filming_start_date=request.filming_start_date,
         filming_end_date=request.filming_end_date,
+        script_path=request.script_path,
         user_id=user_id,
     )
 
@@ -126,6 +128,7 @@ async def update_project(
         "filming_start_date",
         "filming_end_date",
         "status",
+        "script_path",
     }
     filtered_updates = {k: v for k, v in updates.items() if k in allowed_fields}
 

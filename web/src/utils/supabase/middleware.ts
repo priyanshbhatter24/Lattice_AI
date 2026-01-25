@@ -37,7 +37,9 @@ export const updateSession = async (request: NextRequest) => {
   // Route protection logic
   const isAuthPage =
     request.nextUrl.pathname.startsWith("/login") ||
-    request.nextUrl.pathname.startsWith("/signup");
+    request.nextUrl.pathname.startsWith("/signup") ||
+    request.nextUrl.pathname.startsWith("/forgot-password") ||
+    request.nextUrl.pathname.startsWith("/reset-password");
 
   const isProtectedRoute =
     request.nextUrl.pathname.startsWith("/projects") ||

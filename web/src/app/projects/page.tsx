@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { listProjects, createProject, deleteProject, uploadScriptToStorage } from "@/lib/api";
+import { listProjects, createProject, deleteProject, uploadScriptToStorage, updateProject } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import type { Project, CreateProjectRequest } from "@/lib/types";
 
@@ -55,20 +55,27 @@ export default function ProjectsPage() {
 
     setIsCreating(true);
     try {
-      // Upload script to storage if provided
+      // Step 1: Create the project first
+      const newProject = await createProject(formData);
+
+      // Step 2: Upload script and link to project if provided
       if (scriptFile && user) {
         setUploadingScript(true);
         try {
-          await uploadScriptToStorage(scriptFile, user.id);
+          const { path } = await uploadScriptToStorage(scriptFile, user.id);
+          // Step 3: Update project with script path
+          const updatedProject = await updateProject(newProject.id, { script_path: path });
+          setProjects((prev) => [updatedProject, ...prev]);
         } catch (uploadError) {
           console.error("Failed to upload script:", uploadError);
-          // Continue with project creation even if upload fails
+          // Project was created successfully, just add it without script
+          setProjects((prev) => [newProject, ...prev]);
         }
         setUploadingScript(false);
+      } else {
+        setProjects((prev) => [newProject, ...prev]);
       }
 
-      const newProject = await createProject(formData);
-      setProjects((prev) => [newProject, ...prev]);
       setShowCreateModal(false);
       setFormData({
         name: "",
