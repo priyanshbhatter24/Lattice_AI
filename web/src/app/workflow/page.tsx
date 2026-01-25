@@ -52,6 +52,7 @@ export default function Home() {
   const [allVenues, setAllVenues] = useState<LocationCandidate[]>([]); // All discovered venues
   const [latestVenueId, setLatestVenueId] = useState<string | null>(null); // Most recent venue ID
   const [consideringVenue, setConsideringVenue] = useState<LocationCandidate | null>(null); // Currently evaluating
+  const [selectedVenue, setSelectedVenue] = useState<LocationCandidate | null>(null); // Venue to show in modal
   const [savedProjectId, setSavedProjectId] = useState<string | null>(null);
   const [savedSceneIds, setSavedSceneIds] = useState<string[]>([]);
 
@@ -1045,9 +1046,7 @@ export default function Home() {
                     venue={venue}
                     index={index}
                     isLatest={venue.id === latestVenueId}
-                    onClick={() => {
-                      console.log("[VenueClick]", venue.venue_name);
-                    }}
+                    onClick={() => setSelectedVenue(venue)}
                   />
                 ))}
               </div>
@@ -1126,9 +1125,7 @@ export default function Home() {
                   <VenueCard
                     venue={venue}
                     isLatest={false}
-                    onClick={() => {
-                      console.log("[VenueClick]", venue.venue_name);
-                    }}
+                    onClick={() => setSelectedVenue(venue)}
                   />
                 </div>
               ))}
@@ -1152,6 +1149,14 @@ export default function Home() {
               </div>
             </div>
           </div>
+        )}
+
+        {/* Venue Detail Modal */}
+        {selectedVenue && (
+          <VenueDetailModal
+            venue={selectedVenue}
+            onClose={() => setSelectedVenue(null)}
+          />
         )}
       </main>
     </div>
