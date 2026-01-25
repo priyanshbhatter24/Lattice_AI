@@ -1,0 +1,35 @@
+# AutoScout - Requirements
+# Generated from pyproject.toml
+# Last updated: 2026-01-24
+
+# ─── Core Framework ───────────────────────────────────────
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+pydantic>=2.10.0
+pydantic-settings>=2.6.0
+
+# ─── Database ─────────────────────────────────────────────
+supabase>=2.10.0
+
+# ─── AI / LLM ─────────────────────────────────────────────
+# Stage 2: Google GenAI with Google Maps grounding
+google-genai>=1.0.0
+
+# ─── Web / HTTP ───────────────────────────────────────────
+httpx>=0.28.0
+python-multipart>=0.0.18
+sse-starlette>=2.2.0
+
+# ─── Browser Automation ───────────────────────────────────
+browserbase>=1.0.0
+playwright>=1.49.0
+
+# ─── Utilities ────────────────────────────────────────────
+structlog>=24.4.0
+pillow>=11.0.0
+aiofiles>=24.1.0
+python-dotenv>=1.0.0
+
+# ─── Dev Dependencies ─────────────────────────────────────
+# Install with: pip install -r requirements.txt -r requirements-dev.txt
+# Or use: pip install -e ".[dev]"

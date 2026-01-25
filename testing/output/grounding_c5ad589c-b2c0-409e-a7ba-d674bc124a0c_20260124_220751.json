@@ -1,0 +1,13 @@
+{
+  "scene_id": "c5ad589c-b2c0-409e-a7ba-d674bc124a0c",
+  "project_id": "proj_nightshift_001",
+  "query_used": "warehouse abandoned brick walls high ceilings large space large windows/skylights no active business venue for filming in Los Angeles, CA",
+  "candidates": [],
+  "total_found": 0,
+  "filtered_count": 0,
+  "processing_time_seconds": 11.838661432266235,
+  "errors": [
+    "Your default credentials were not found. To set up Application Default Credentials, see https://cloud.google.com/docs/authentication/external/set-up-adc for more information."
+  ],
+  "warnings": []
+}
