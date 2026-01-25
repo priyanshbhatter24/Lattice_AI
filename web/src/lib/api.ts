@@ -162,3 +162,172 @@ export async function getAvailableScripts(): Promise<AvailableScript[]> {
 
 // Re-export the AvailableScript type for convenience
 export type { AvailableScript };
+
+// ══════════════════════════════════════════════════════════
+// Stage 3: Vapi Calling API
+// ══════════════════════════════════════════════════════════
+
+import type {
+  Project,
+  CreateProjectRequest,
+  LocationCandidate,
+  CreateLocationRequest,
+  CallResponse,
+  BatchResponse,
+  CallStatusResponse,
+  Scene,
+} from "./types";
+
+// ══════════════════════════════════════════════════════════
+// Project API
+// ══════════════════════════════════════════════════════════
+
+export async function listProjects(limit = 50): Promise<Project[]> {
+  const response = await fetch(`${API_BASE}/api/projects?limit=${limit}`);
+  if (!response.ok) throw new Error("Failed to fetch projects");
+  return response.json();
+}
+
+export async function getProject(projectId: string): Promise<Project> {
+  const response = await fetch(`${API_BASE}/api/projects/${projectId}`);
+  if (!response.ok) throw new Error("Project not found");
+  return response.json();
+}
+
+export async function createProject(data: CreateProjectRequest): Promise<Project> {
+  const response = await fetch(`${API_BASE}/api/projects`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: "Failed to create project" }));
+    throw new Error(error.detail);
+  }
+  return response.json();
+}
+
+export async function updateProject(
+  projectId: string,
+  updates: Partial<Project>
+): Promise<Project> {
+  const response = await fetch(`${API_BASE}/api/projects/${projectId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(updates),
+  });
+  if (!response.ok) throw new Error("Failed to update project");
+  return response.json();
+}
+
+export async function listProjectScenes(projectId: string): Promise<Scene[]> {
+  const response = await fetch(`${API_BASE}/api/projects/${projectId}/scenes`);
+  if (!response.ok) throw new Error("Failed to fetch scenes");
+  return response.json();
+}
+
+// ══════════════════════════════════════════════════════════
+// Location Candidates API
+// ══════════════════════════════════════════════════════════
+
+export async function listLocations(params: {
+  projectId?: string;
+  sceneId?: string;
+  limit?: number;
+}): Promise<LocationCandidate[]> {
+  const query = new URLSearchParams();
+  if (params.projectId) query.set("project_id", params.projectId);
+  if (params.sceneId) query.set("scene_id", params.sceneId);
+  if (params.limit) query.set("limit", params.limit.toString());
+
+  const response = await fetch(`${API_BASE}/api/locations?${query}`);
+  if (!response.ok) throw new Error("Failed to fetch locations");
+  return response.json();
+}
+
+export async function getLocation(candidateId: string): Promise<LocationCandidate> {
+  const response = await fetch(`${API_BASE}/api/locations/${candidateId}`);
+  if (!response.ok) throw new Error("Location not found");
+  return response.json();
+}
+
+export async function createMockLocation(
+  data: CreateLocationRequest
+): Promise<LocationCandidate> {
+  const response = await fetch(`${API_BASE}/api/locations`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: "Failed to create location" }));
+    throw new Error(error.detail);
+  }
+  return response.json();
+}
+
+export async function approveLocation(
+  candidateId: string,
+  approvedBy: string
+): Promise<LocationCandidate> {
+  const response = await fetch(
+    `${API_BASE}/api/locations/${candidateId}/approve?approved_by=${encodeURIComponent(approvedBy)}`,
+    { method: "PATCH" }
+  );
+  if (!response.ok) throw new Error("Failed to approve location");
+  return response.json();
+}
+
+export async function rejectLocation(
+  candidateId: string,
+  reason: string
+): Promise<LocationCandidate> {
+  const response = await fetch(
+    `${API_BASE}/api/locations/${candidateId}/reject?reason=${encodeURIComponent(reason)}`,
+    { method: "PATCH" }
+  );
+  if (!response.ok) throw new Error("Failed to reject location");
+  return response.json();
+}
+
+// ══════════════════════════════════════════════════════════
+// Vapi Calls API
+// ══════════════════════════════════════════════════════════
+
+export async function triggerCall(candidateId: string): Promise<CallResponse> {
+  const response = await fetch(`${API_BASE}/api/calls/trigger`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ candidate_id: candidateId }),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: "Failed to trigger call" }));
+    throw new Error(error.detail);
+  }
+  return response.json();
+}
+
+export async function triggerBatchCalls(
+  candidateIds: string[],
+  maxConcurrent?: number
+): Promise<BatchResponse> {
+  const response = await fetch(`${API_BASE}/api/calls/batch`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      candidate_ids: candidateIds,
+      max_concurrent: maxConcurrent,
+    }),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: "Failed to trigger batch calls" }));
+    throw new Error(error.detail);
+  }
+  return response.json();
+}
+
+export async function getCallStatus(vapiCallId: string): Promise<CallStatusResponse> {
+  const response = await fetch(`${API_BASE}/api/calls/${vapiCallId}`);
+  if (!response.ok) throw new Error("Failed to get call status");
+  return response.json();
+}
