@@ -44,17 +44,10 @@ export const updateSession = async (request: NextRequest) => {
   const isProtectedRoute =
     request.nextUrl.pathname.startsWith("/projects") ||
     request.nextUrl.pathname.startsWith("/calls") ||
-    request.nextUrl.pathname.startsWith("/grounding");
+    request.nextUrl.pathname.startsWith("/grounding") ||
+    request.nextUrl.pathname.startsWith("/analyze");
 
-  const isRootPage = request.nextUrl.pathname === "/";
-  const hasProjectParam = request.nextUrl.searchParams.has("project");
-
-  // Redirect root page based on auth status (but allow if ?project= param exists)
-  if (isRootPage && !hasProjectParam) {
-    const url = request.nextUrl.clone();
-    url.pathname = user ? "/projects" : "/login";
-    return NextResponse.redirect(url);
-  }
+  // Landing page at / is always accessible - it shows appropriate CTAs based on auth status
 
   // Redirect unauthenticated users from protected routes to login
   if (!user && isProtectedRoute) {

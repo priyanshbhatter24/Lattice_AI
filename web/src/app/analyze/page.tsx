@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { uploadScript, analyzeScriptWithCallback, getAvailableScripts, getProject, saveProjectScenes, type AvailableScript } from "@/lib/api";
 import type { LocationRequirement, AnalysisProgress, SSEEvent, Project } from "@/lib/types";
@@ -15,7 +15,27 @@ const ANALYSIS_STEPS = [
   { phase: "complete", label: "Done", sublabel: "Complete" },
 ] as const;
 
-export default function Home() {
+export default function AnalyzePage() {
+  return (
+    <Suspense fallback={<AnalyzePageLoading />}>
+      <AnalyzePageContent />
+    </Suspense>
+  );
+}
+
+function AnalyzePageLoading() {
+  return (
+    <div className="min-h-screen flex items-center justify-center" style={{ background: "var(--color-bg)" }}>
+      <div className="animate-spin">
+        <svg width={32} height={32} viewBox="0 0 24 24" fill="none" stroke="var(--color-text-muted)" strokeWidth={2}>
+          <path d="M21 12a9 9 0 11-6.219-8.56" />
+        </svg>
+      </div>
+    </div>
+  );
+}
+
+function AnalyzePageContent() {
   const searchParams = useSearchParams();
   const projectId = searchParams.get("project");
 
@@ -258,30 +278,32 @@ export default function Home() {
               </>
             ) : null}
             {/* Film reel inspired icon */}
-            <div
-              className="flex h-9 w-9 items-center justify-center rounded-full"
-              style={{ background: "var(--color-text)", color: "var(--color-bg-elevated)" }}
-            >
-              <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <circle cx="12" cy="12" r="10" />
-                <circle cx="12" cy="12" r="3" />
-                <circle cx="12" cy="5" r="1" fill="currentColor" />
-                <circle cx="12" cy="19" r="1" fill="currentColor" />
-                <circle cx="5" cy="12" r="1" fill="currentColor" />
-                <circle cx="19" cy="12" r="1" fill="currentColor" />
-              </svg>
-            </div>
-            <div>
-              <h1
-                className="text-base font-semibold tracking-tight"
-                style={{ fontFamily: "var(--font-display)", color: "var(--color-text)" }}
+            <a href="/" className="flex items-center gap-3">
+              <div
+                className="flex h-9 w-9 items-center justify-center rounded-full"
+                style={{ background: "var(--color-text)", color: "var(--color-bg-elevated)" }}
               >
-                Location Scout
-              </h1>
-              <p className="text-[10px] uppercase tracking-widest" style={{ color: "var(--color-text-subtle)" }}>
-                Script Analysis
-              </p>
-            </div>
+                <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <circle cx="12" cy="12" r="10" />
+                  <circle cx="12" cy="12" r="3" />
+                  <circle cx="12" cy="5" r="1" fill="currentColor" />
+                  <circle cx="12" cy="19" r="1" fill="currentColor" />
+                  <circle cx="5" cy="12" r="1" fill="currentColor" />
+                  <circle cx="19" cy="12" r="1" fill="currentColor" />
+                </svg>
+              </div>
+              <div>
+                <h1
+                  className="text-base font-semibold tracking-tight"
+                  style={{ fontFamily: "var(--font-display)", color: "var(--color-text)" }}
+                >
+                  Location Scout
+                </h1>
+                <p className="text-[10px] uppercase tracking-widest" style={{ color: "var(--color-text-subtle)" }}>
+                  Script Analysis
+                </p>
+              </div>
+            </a>
           </div>
           <div className="flex items-center gap-2">
             {(selectedScript || state !== "idle") && (

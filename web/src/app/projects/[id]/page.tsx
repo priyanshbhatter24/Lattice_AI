@@ -147,7 +147,7 @@ export default function ProjectDetailPage() {
           <div className="grid grid-cols-3 gap-4">
             {/* Script Analysis */}
             <a
-              href={`/?project=${projectId}`}
+              href={`/analyze?project=${projectId}`}
               className="paper-card group flex flex-col rounded-lg p-5 transition-all hover:scale-[1.02]"
             >
               <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-full" style={{ background: "var(--color-accent-light)" }}>
