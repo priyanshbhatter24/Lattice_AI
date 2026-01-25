@@ -35,11 +35,14 @@ async function getAuthHeaders(): Promise<HeadersInit> {
     const { createClient } = await import("@/utils/supabase/client");
     const supabase = createClient();
     const { data } = await supabase.auth.getSession();
+    console.log("[Auth] Session data:", data.session ? "exists" : "null");
     if (data.session?.access_token) {
+      console.log("[Auth] Token found, length:", data.session.access_token.length);
       return {
         Authorization: `Bearer ${data.session.access_token}`,
       };
     }
+    console.log("[Auth] No access token in session");
   } catch (e) {
     console.warn("Failed to get auth token:", e);
   }

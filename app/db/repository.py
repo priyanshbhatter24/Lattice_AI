@@ -11,7 +11,7 @@ from uuid import UUID
 import structlog
 from supabase import Client
 
-from app.db.client import get_supabase_client
+from app.db.client import get_supabase_client, get_supabase_client_with_token
 from app.grounding.models import (
     GroundingResult,
     LocationCandidate,
@@ -26,8 +26,14 @@ class BaseRepository:
 
     table_name: str = ""
 
-    def __init__(self, client: Client | None = None):
-        self.client = client or get_supabase_client()
+    def __init__(self, client: Client | None = None, access_token: str | None = None):
+        if client:
+            self.client = client
+        elif access_token:
+            # Use token-authenticated client for RLS
+            self.client = get_supabase_client_with_token(access_token)
+        else:
+            self.client = get_supabase_client()
 
     def _table(self):
         return self.client.table(self.table_name)

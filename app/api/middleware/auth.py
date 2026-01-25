@@ -1,112 +1,95 @@
 """
-JWT Authentication middleware for Supabase Auth.
+Authentication middleware for Supabase Auth.
 
-Validates JWTs from Supabase and extracts user_id for route handlers.
+Validates access tokens via Supabase API and extracts user_id for route handlers.
 """
 
-import os
+from dataclasses import dataclass
 from typing import Optional
 
-import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+
+from app.db.client import get_supabase_client
 
 # Optional bearer token - allows endpoints to work without auth
 security = HTTPBearer()
 optional_security = HTTPBearer(auto_error=False)
 
 
+@dataclass
+class AuthenticatedUser:
+    """Authenticated user with ID and access token."""
+    user_id: str
+    access_token: str
+
+
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
-) -> str:
+) -> AuthenticatedUser:
     """
-    Validate Supabase JWT and return user_id.
+    Validate Supabase access token and return user info.
 
     Raises 401 if token is missing or invalid.
 
     Usage:
         @router.get("/protected")
-        async def protected_route(user_id: str = Depends(get_current_user)):
-            ...
+        async def protected_route(auth: AuthenticatedUser = Depends(get_current_user)):
+            user_id = auth.user_id
+            # Use auth.access_token for RLS-authenticated DB operations
     """
-    return _validate_token(credentials.credentials)
+    return await _validate_token(credentials.credentials)
 
 
 async def get_optional_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(optional_security),
-) -> Optional[str]:
+) -> Optional[AuthenticatedUser]:
     """
-    Optionally validate Supabase JWT and return user_id.
+    Optionally validate Supabase access token and return user info.
 
-    Returns None if no token provided (useful for routes that work
-    both with and without auth).
-
-    Usage:
-        @router.get("/maybe-protected")
-        async def maybe_protected(user_id: Optional[str] = Depends(get_optional_user)):
-            if user_id:
-                # Authenticated
-            else:
-                # Anonymous
+    Returns None if no token provided.
     """
     if credentials is None:
         return None
-    return _validate_token(credentials.credentials)
+    return await _validate_token(credentials.credentials)
 
 
-def _validate_token(token: str) -> str:
+async def _validate_token(token: str) -> AuthenticatedUser:
     """
-    Validate a Supabase JWT and extract the user_id.
+    Validate a Supabase access token and extract user info.
+
+    Uses Supabase's auth.get_user() API to verify the token.
 
     Args:
-        token: The JWT access token from the Authorization header
+        token: The access token from the Authorization header
 
     Returns:
-        The user_id (UUID string) from the 'sub' claim
+        AuthenticatedUser with user_id and access_token
 
     Raises:
         HTTPException(401): If token is invalid, expired, or missing required claims
     """
-    jwt_secret = os.environ.get("SUPABASE_JWT_SECRET")
-
-    if not jwt_secret:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Server auth configuration error",
-        )
-
     try:
-        # Decode and validate the JWT
-        # Supabase uses HS256 algorithm and 'authenticated' audience
-        payload = jwt.decode(
-            token,
-            jwt_secret,
-            algorithms=["HS256"],
-            audience="authenticated",
-        )
+        supabase = get_supabase_client()
 
-        # Extract user_id from 'sub' claim
-        user_id = payload.get("sub")
-        if not user_id:
+        # Use Supabase to verify the token and get user info
+        response = supabase.auth.get_user(token)
+
+        if response.user is None:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid token: missing user identifier",
+                detail="Invalid or expired token",
             )
 
-        return user_id
+        return AuthenticatedUser(
+            user_id=response.user.id,
+            access_token=token,
+        )
 
-    except jwt.ExpiredSignatureError:
+    except HTTPException:
+        raise
+    except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token has expired",
-        )
-    except jwt.InvalidAudienceError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token audience",
-        )
-    except jwt.InvalidTokenError as e:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Invalid token: {str(e)}",
+            detail=f"Authentication failed: {str(e)}",
         )

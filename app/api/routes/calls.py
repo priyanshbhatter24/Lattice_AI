@@ -11,7 +11,7 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from app.api.middleware.auth import get_current_user
+from app.api.middleware.auth import AuthenticatedUser, get_current_user
 from app.db.repository import LocationCandidateRepository, ProjectRepository, SceneRepository
 from app.vapi.call_context import CallContext, ProjectContext
 from app.vapi.service import get_vapi_service
@@ -64,16 +64,16 @@ class BatchResponse(BaseModel):
 @router.post("/trigger", response_model=CallResponse)
 async def trigger_call(
     request: TriggerCallRequest,
-    user_id: str = Depends(get_current_user),
+    auth: AuthenticatedUser = Depends(get_current_user),
 ) -> CallResponse:
     """
     Trigger a single outbound call to a venue.
 
     The candidate must have a phone number and be in a callable state.
     """
-    candidate_repo = LocationCandidateRepository()
-    project_repo = ProjectRepository()
-    scene_repo = SceneRepository()
+    candidate_repo = LocationCandidateRepository(access_token=auth.access_token)
+    project_repo = ProjectRepository(access_token=auth.access_token)
+    scene_repo = SceneRepository(access_token=auth.access_token)
 
     # Get candidate
     candidate_data = candidate_repo.get(request.candidate_id)
@@ -82,7 +82,7 @@ async def trigger_call(
 
     # Verify project ownership
     project_data = project_repo.get(candidate_data["project_id"])
-    if not project_data or project_data.get("user_id") != user_id:
+    if not project_data or project_data.get("user_id") != auth.user_id:
         raise HTTPException(status_code=404, detail="Candidate not found")
 
     # Check phone number
@@ -145,16 +145,16 @@ async def trigger_call(
 @router.post("/batch", response_model=BatchResponse)
 async def trigger_batch_calls(
     request: TriggerBatchRequest,
-    user_id: str = Depends(get_current_user),
+    auth: AuthenticatedUser = Depends(get_current_user),
 ) -> BatchResponse:
     """
     Trigger multiple outbound calls concurrently.
 
     Calls are limited by max_concurrent to avoid overwhelming the system.
     """
-    candidate_repo = LocationCandidateRepository()
-    project_repo = ProjectRepository()
-    scene_repo = SceneRepository()
+    candidate_repo = LocationCandidateRepository(access_token=auth.access_token)
+    project_repo = ProjectRepository(access_token=auth.access_token)
+    scene_repo = SceneRepository(access_token=auth.access_token)
 
     # Track verified project IDs to avoid redundant lookups
     verified_projects: set[str] = set()
@@ -175,7 +175,7 @@ async def trigger_batch_calls(
         project_id = candidate_data["project_id"]
         if project_id not in verified_projects:
             project_data = project_repo.get(project_id)
-            if not project_data or project_data.get("user_id") != user_id:
+            if not project_data or project_data.get("user_id") != auth.user_id:
                 logger.warning("Candidate not owned by user", candidate_id=candidate_id)
                 continue
             verified_projects.add(project_id)
@@ -233,7 +233,7 @@ async def trigger_batch_calls(
 @router.get("/{vapi_call_id}", response_model=dict[str, Any])
 async def get_call_status(
     vapi_call_id: str,
-    user_id: str = Depends(get_current_user),
+    auth: AuthenticatedUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     """
     Get the current status of a call from Vapi.

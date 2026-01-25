@@ -2,7 +2,7 @@
 API routes for project management.
 
 Provides endpoints for creating and managing film projects.
-All endpoints require authentication.
+All endpoints require authentication. RLS handles authorization.
 """
 
 from typing import Any
@@ -11,7 +11,7 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from app.api.middleware.auth import get_current_user
+from app.api.middleware.auth import AuthenticatedUser, get_current_user
 from app.db.repository import ProjectRepository, SceneRepository
 
 logger = structlog.get_logger()
@@ -52,27 +52,24 @@ class CreateSceneRequest(BaseModel):
 @router.get("")
 async def list_projects(
     limit: int = 50,
-    user_id: str = Depends(get_current_user),
+    auth: AuthenticatedUser = Depends(get_current_user),
 ) -> list[dict[str, Any]]:
     """List all projects for the authenticated user."""
-    repo = ProjectRepository()
-    return repo.list_by_user(user_id, limit=limit)
+    # RLS automatically filters to user's projects
+    repo = ProjectRepository(access_token=auth.access_token)
+    return repo.list_by_user(auth.user_id, limit=limit)
 
 
 @router.get("/{project_id}")
 async def get_project(
     project_id: str,
-    user_id: str = Depends(get_current_user),
+    auth: AuthenticatedUser = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """Get a single project by ID (must be owned by authenticated user)."""
-    repo = ProjectRepository()
+    """Get a single project by ID (RLS ensures ownership)."""
+    repo = ProjectRepository(access_token=auth.access_token)
     project = repo.get(project_id)
 
     if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
-
-    # Verify ownership
-    if project.get("user_id") != user_id:
         raise HTTPException(status_code=404, detail="Project not found")
 
     return project
@@ -81,10 +78,10 @@ async def get_project(
 @router.post("")
 async def create_project(
     request: CreateProjectRequest,
-    user_id: str = Depends(get_current_user),
+    auth: AuthenticatedUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Create a new project for the authenticated user."""
-    repo = ProjectRepository()
+    repo = ProjectRepository(access_token=auth.access_token)
 
     project = repo.create(
         name=request.name,
@@ -94,10 +91,10 @@ async def create_project(
         filming_start_date=request.filming_start_date,
         filming_end_date=request.filming_end_date,
         script_path=request.script_path,
-        user_id=user_id,
+        user_id=auth.user_id,
     )
 
-    logger.info("Created project", project_id=project["id"], name=request.name, user_id=user_id)
+    logger.info("Created project", project_id=project["id"], name=request.name, user_id=auth.user_id)
 
     return project
 
@@ -106,18 +103,10 @@ async def create_project(
 async def update_project(
     project_id: str,
     updates: dict[str, Any],
-    user_id: str = Depends(get_current_user),
+    auth: AuthenticatedUser = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """Update a project (must be owned by authenticated user)."""
-    repo = ProjectRepository()
-
-    project = repo.get(project_id)
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
-
-    # Verify ownership
-    if project.get("user_id") != user_id:
-        raise HTTPException(status_code=404, detail="Project not found")
+    """Update a project (RLS ensures ownership)."""
+    repo = ProjectRepository(access_token=auth.access_token)
 
     # Filter allowed fields
     allowed_fields = {
@@ -137,6 +126,9 @@ async def update_project(
 
     result = repo.update(project_id, **filtered_updates)
 
+    if not result:
+        raise HTTPException(status_code=404, detail="Project not found")
+
     logger.info("Updated project", project_id=project_id, fields=list(filtered_updates.keys()))
 
     return result
@@ -145,22 +137,19 @@ async def update_project(
 @router.delete("/{project_id}")
 async def delete_project(
     project_id: str,
-    user_id: str = Depends(get_current_user),
+    auth: AuthenticatedUser = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """Delete a project (must be owned by authenticated user)."""
-    repo = ProjectRepository()
+    """Delete a project (RLS ensures ownership)."""
+    repo = ProjectRepository(access_token=auth.access_token)
 
+    # Check exists first (RLS will filter)
     project = repo.get(project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    # Verify ownership
-    if project.get("user_id") != user_id:
-        raise HTTPException(status_code=404, detail="Project not found")
-
     repo.delete(project_id)
 
-    logger.info("Deleted project", project_id=project_id, user_id=user_id)
+    logger.info("Deleted project", project_id=project_id, user_id=auth.user_id)
 
     return {"success": True, "deleted_id": project_id}
 
@@ -168,18 +157,15 @@ async def delete_project(
 @router.get("/{project_id}/scenes")
 async def list_project_scenes(
     project_id: str,
-    user_id: str = Depends(get_current_user),
+    auth: AuthenticatedUser = Depends(get_current_user),
 ) -> list[dict[str, Any]]:
-    """List all scenes for a project (must be owned by authenticated user)."""
-    project_repo = ProjectRepository()
-    scene_repo = SceneRepository()
+    """List all scenes for a project (RLS ensures ownership)."""
+    repo = ProjectRepository(access_token=auth.access_token)
+    scene_repo = SceneRepository(access_token=auth.access_token)
 
-    project = project_repo.get(project_id)
+    # Verify project exists and user can access it
+    project = repo.get(project_id)
     if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
-
-    # Verify ownership
-    if project.get("user_id") != user_id:
         raise HTTPException(status_code=404, detail="Project not found")
 
     return scene_repo.list_by_project(project_id)
@@ -189,24 +175,21 @@ async def list_project_scenes(
 async def create_scene(
     project_id: str,
     request: CreateSceneRequest,
-    user_id: str = Depends(get_current_user),
+    auth: AuthenticatedUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     """
-    Create a test scene for a project (must be owned by authenticated user).
+    Create a test scene for a project (RLS ensures ownership).
 
     This is primarily for testing - normally scenes come from Stage 1 script analysis.
     """
     from uuid import uuid4
 
-    project_repo = ProjectRepository()
-    scene_repo = SceneRepository()
+    repo = ProjectRepository(access_token=auth.access_token)
+    scene_repo = SceneRepository(access_token=auth.access_token)
 
-    project = project_repo.get(project_id)
+    # Verify project exists and user can access it
+    project = repo.get(project_id)
     if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
-
-    # Verify ownership
-    if project.get("user_id") != user_id:
         raise HTTPException(status_code=404, detail="Project not found")
 
     scene_id = str(uuid4())

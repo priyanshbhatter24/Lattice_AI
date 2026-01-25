@@ -11,7 +11,7 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from app.api.middleware.auth import get_current_user
+from app.api.middleware.auth import AuthenticatedUser, get_current_user
 from app.db.repository import LocationCandidateRepository, ProjectRepository
 
 logger = structlog.get_logger()
@@ -49,20 +49,20 @@ async def list_locations(
     project_id: str | None = None,
     scene_id: str | None = None,
     limit: int = 50,
-    user_id: str = Depends(get_current_user),
+    auth: AuthenticatedUser = Depends(get_current_user),
 ) -> list[dict[str, Any]]:
     """
     List location candidates for a project owned by the authenticated user.
 
     Filter by project_id or scene_id.
     """
-    repo = LocationCandidateRepository()
-    project_repo = ProjectRepository()
+    repo = LocationCandidateRepository(access_token=auth.access_token)
+    project_repo = ProjectRepository(access_token=auth.access_token)
 
     # Verify project ownership if project_id provided
     if project_id:
         project = project_repo.get(project_id)
-        if not project or project.get("user_id") != user_id:
+        if not project or project.get("user_id") != auth.user_id:
             raise HTTPException(status_code=404, detail="Project not found")
 
     if scene_id:
@@ -78,11 +78,11 @@ async def list_locations(
 @router.get("/{candidate_id}")
 async def get_location(
     candidate_id: str,
-    user_id: str = Depends(get_current_user),
+    auth: AuthenticatedUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Get a single location candidate by ID (must belong to user's project)."""
-    repo = LocationCandidateRepository()
-    project_repo = ProjectRepository()
+    repo = LocationCandidateRepository(access_token=auth.access_token)
+    project_repo = ProjectRepository(access_token=auth.access_token)
 
     candidate = repo.get(candidate_id)
     if not candidate:
@@ -90,7 +90,7 @@ async def get_location(
 
     # Verify project ownership
     project = project_repo.get(candidate["project_id"])
-    if not project or project.get("user_id") != user_id:
+    if not project or project.get("user_id") != auth.user_id:
         raise HTTPException(status_code=404, detail="Location candidate not found")
 
     return candidate
@@ -99,7 +99,7 @@ async def get_location(
 @router.post("")
 async def create_location(
     request: CreateLocationRequest,
-    user_id: str = Depends(get_current_user),
+    auth: AuthenticatedUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     """
     Create a mock location candidate for testing.
@@ -107,12 +107,12 @@ async def create_location(
     This endpoint is primarily for testing the Vapi integration
     before Stage 2 grounding is connected.
     """
-    repo = LocationCandidateRepository()
-    project_repo = ProjectRepository()
+    repo = LocationCandidateRepository(access_token=auth.access_token)
+    project_repo = ProjectRepository(access_token=auth.access_token)
 
     # Verify project ownership
     project = project_repo.get(request.project_id)
-    if not project or project.get("user_id") != user_id:
+    if not project or project.get("user_id") != auth.user_id:
         raise HTTPException(status_code=404, detail="Project not found")
 
     # Create minimal candidate data
@@ -146,11 +146,11 @@ async def create_location(
 @router.delete("/{candidate_id}")
 async def delete_location(
     candidate_id: str,
-    user_id: str = Depends(get_current_user),
+    auth: AuthenticatedUser = Depends(get_current_user),
 ) -> dict[str, str]:
     """Delete a location candidate (must belong to user's project)."""
-    repo = LocationCandidateRepository()
-    project_repo = ProjectRepository()
+    repo = LocationCandidateRepository(access_token=auth.access_token)
+    project_repo = ProjectRepository(access_token=auth.access_token)
 
     # Check exists
     candidate = repo.get(candidate_id)
@@ -159,7 +159,7 @@ async def delete_location(
 
     # Verify project ownership
     project = project_repo.get(candidate["project_id"])
-    if not project or project.get("user_id") != user_id:
+    if not project or project.get("user_id") != auth.user_id:
         raise HTTPException(status_code=404, detail="Location candidate not found")
 
     # Delete
@@ -174,11 +174,11 @@ async def delete_location(
 async def approve_location(
     candidate_id: str,
     approved_by: str,
-    user_id: str = Depends(get_current_user),
+    auth: AuthenticatedUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Approve a location candidate for booking (must belong to user's project)."""
-    repo = LocationCandidateRepository()
-    project_repo = ProjectRepository()
+    repo = LocationCandidateRepository(access_token=auth.access_token)
+    project_repo = ProjectRepository(access_token=auth.access_token)
 
     candidate = repo.get(candidate_id)
     if not candidate:
@@ -186,7 +186,7 @@ async def approve_location(
 
     # Verify project ownership
     project = project_repo.get(candidate["project_id"])
-    if not project or project.get("user_id") != user_id:
+    if not project or project.get("user_id") != auth.user_id:
         raise HTTPException(status_code=404, detail="Location candidate not found")
 
     result = repo.approve(candidate_id, approved_by)
@@ -200,11 +200,11 @@ async def approve_location(
 async def reject_location(
     candidate_id: str,
     reason: str,
-    user_id: str = Depends(get_current_user),
+    auth: AuthenticatedUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Reject a location candidate (must belong to user's project)."""
-    repo = LocationCandidateRepository()
-    project_repo = ProjectRepository()
+    repo = LocationCandidateRepository(access_token=auth.access_token)
+    project_repo = ProjectRepository(access_token=auth.access_token)
 
     candidate = repo.get(candidate_id)
     if not candidate:
@@ -212,7 +212,7 @@ async def reject_location(
 
     # Verify project ownership
     project = project_repo.get(candidate["project_id"])
-    if not project or project.get("user_id") != user_id:
+    if not project or project.get("user_id") != auth.user_id:
         raise HTTPException(status_code=404, detail="Location candidate not found")
 
     result = repo.reject(candidate_id, reason)
