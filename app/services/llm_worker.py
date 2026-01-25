@@ -1,18 +1,28 @@
+"""
+LLM Worker for Stage 1: Script Analysis
+
+Uses Gemini 2.5 Flash for fast, structured location extraction from screenplays.
+"""
+
 import asyncio
 import json
+import re
 import structlog
 from collections.abc import AsyncGenerator
 
-from openai import AsyncOpenAI
+from google import genai
+from google.genai.types import GenerateContentConfig
 
 from app.config import settings
+from app.grounding.config import setup_environment, get_config
 from app.models.location import Constraints, LocationRequirement, UniqueLocation, Vibe
+from app.grounding.models import VibeCategory
 
 
 logger = structlog.get_logger()
 
-# Initialize OpenAI client
-client = AsyncOpenAI(api_key=settings.openai_api_key)
+# Valid vibe categories for validation
+VALID_VIBES = [v.value for v in VibeCategory]
 
 
 LOCATION_ANALYSIS_PROMPT = """You are a professional film location scout analyzing a screenplay to extract detailed location requirements.
@@ -33,8 +43,8 @@ IMPORTANT RULES:
 Provide a JSON response:
 {{
   "vibe": {{
-    "primary": "<aesthetic: industrial, luxury, suburban, urban-gritty, natural, retro-vintage, futuristic, institutional, commercial, residential>",
-    "secondary": "<optional secondary aesthetic or null>",
+    "primary": "<MUST be one of: industrial, luxury, suburban, urban-gritty, natural, retro-vintage, futuristic, institutional, commercial, residential>",
+    "secondary": "<one of the above categories, or null if not applicable>",
     "descriptors": ["<3-5 visual descriptors ONLY from script details, not generic assumptions>"],
     "confidence": <0.0-1.0 based on how much detail the script provides about this location>
   }},
@@ -45,24 +55,134 @@ Provide a JSON response:
   }},
   "location_description": "<Describe what this location should look like based on the script. Include architectural style, key features, atmosphere, and era/period if specified. Be detailed when the script is detailed, brief when the script is sparse.>",
   "scouting_notes": "<Only mention deal-breakers or must-haves SPECIFIC to this location based on script requirements. Skip generic filming logistics that apply to every location. If nothing specific, just say 'Standard location requirements.'>",
-  "estimated_shoot_duration_hours": <estimate based on scene complexity and number of pages>
+  "estimated_shoot_hours": <integer estimate based on scene complexity and number of pages>,
+  "priority": "<MUST be exactly one of: critical, important, flexible>"
 }}
 
 Respond with valid JSON only."""
 
 
+DEDUP_PASS1_PROMPT = """Analyze these screenplay scene headers to identify duplicates.
+
+Scene headers:
+{location_list}
+
+Do TWO things:
+
+1. MERGE headers that CLEARLY refer to the same location based on names:
+   - "MARK'S DORM ROOM" and "MARK'S ROOM" = same (shortened)
+   - "CAMERON AND TYLER'S DORM ROOM" and "TYLER AND CAMERON'S DORM ROOM" = same (name order)
+   - "PORCELLIAN CLUB" and "PORCELLIAN" = same (suffix dropped)
+
+2. FLAG headers that are generic/ambiguous and MIGHT be the same location but need script context to decide:
+   - Generic names like "BEDROOM", "HALLWAY", "KITCHEN", "OFFICE", "CAR"
+   - Only flag if the same generic name appears multiple times
+
+Return JSON:
+{{
+  "merge": {{
+    "canonical_header": ["header1", "header2"]
+  }},
+  "needs_context": ["INT. BEDROOM", "INT. HALLWAY"]
+}}
+
+Only include headers that have duplicates or need context review. Respond with valid JSON only."""
+
+
+DEDUP_PASS2_PROMPT = """These screenplay locations have generic names. Look at the script context to determine if they're the SAME or DIFFERENT physical locations.
+
+{location_contexts}
+
+For each location name, decide based on:
+- Characters present (same characters = likely same place)
+- Setting details mentioned
+- Story continuity
+
+Return JSON with your decision for each:
+{{
+  "INT. BEDROOM": "same",
+  "INT. HALLWAY": "different"
+}}
+
+Respond with valid JSON only."""
+
+
+def _normalize_vibe(value: str | None) -> VibeCategory | None:
+    """Normalize a vibe string to a VibeCategory enum."""
+    if not value:
+        return None
+    normalized = value.lower().strip()
+    if normalized in VALID_VIBES:
+        return VibeCategory(normalized)
+    # Fallback: try to match partial
+    for valid in VALID_VIBES:
+        if valid in normalized or normalized in valid:
+            return VibeCategory(valid)
+    # Default fallback
+    logger.warning("Unknown vibe category, defaulting to commercial", vibe=value)
+    return VibeCategory.COMMERCIAL
+
+
+def _normalize_priority(value: str | None) -> str:
+    """Normalize priority to one of: critical, important, flexible."""
+    if not value:
+        return "important"
+    normalized = value.lower().strip()
+    if "critical" in normalized:
+        return "critical"
+    if "flexible" in normalized:
+        return "flexible"
+    return "important"  # Default
+
+
+def _extract_json(text: str) -> dict:
+    """Extract JSON from response text, handling markdown code blocks."""
+    if not text:
+        raise ValueError("Empty response")
+
+    # Try to find JSON in code blocks first
+    json_match = re.search(r'```(?:json)?\s*([\s\S]*?)```', text)
+    if json_match:
+        text = json_match.group(1)
+
+    # Try to find raw JSON object
+    json_match = re.search(r'\{[\s\S]*\}', text)
+    if json_match:
+        return json.loads(json_match.group())
+
+    # Try parsing the whole thing
+    return json.loads(text)
+
+
+# Initialize Gemini client (lazy initialization)
+_client = None
+
+def _get_client():
+    global _client
+    if _client is None:
+        setup_environment()
+        config = get_config()
+        _client = genai.Client(http_options={"api_version": config.api_version})
+    return _client
+
+
 async def analyze_location_with_llm(
-    location: UniqueLocation, location_idx: int
+    location: UniqueLocation,
+    location_idx: int,
+    project_id: str = "",
+    target_city: str = "Los Angeles, CA",
 ) -> LocationRequirement:
     """
-    Analyze a single location using OpenAI and return structured requirements.
+    Analyze a single location using Gemini and return structured requirements.
 
     Args:
         location: The unique location to analyze
-        location_idx: Index for generating scene_id
+        location_idx: Index for generating scene_number
+        project_id: Project ID to associate with this requirement
+        target_city: Target city for location search
 
     Returns:
-        LocationRequirement with all extracted details
+        LocationRequirement with all extracted details (Stage 2 compatible)
     """
     prompt = LOCATION_ANALYSIS_PROMPT.format(
         scene_header=location.scene_header,
@@ -70,49 +190,61 @@ async def analyze_location_with_llm(
         script_context=location.combined_context,
     )
 
+    config = get_config()
+    client = _get_client()
+
     max_retries = 3
     for attempt in range(max_retries):
         try:
-            response = await client.chat.completions.create(
-                model=settings.openai_model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "You are a professional film location scout. Respond only with valid JSON.",
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-                response_format={"type": "json_object"},
-                temperature=0.7,
-            )
+            # Run Gemini call in thread to avoid blocking
+            def _call_gemini():
+                return client.models.generate_content(
+                    model=config.model_name,
+                    contents=prompt,
+                    config=GenerateContentConfig(
+                        response_mime_type="application/json",
+                    ),
+                )
 
-            content = response.choices[0].message.content
-            data = json.loads(content)
+            response = await asyncio.to_thread(_call_gemini)
+            content = response.text
+            data = _extract_json(content)
 
-            # Parse the response into our models
+            # Parse vibe with enum validation
+            primary_vibe = _normalize_vibe(data["vibe"]["primary"])
+            secondary_vibe = _normalize_vibe(data["vibe"].get("secondary"))
+
             vibe = Vibe(
-                primary=data["vibe"]["primary"],
-                secondary=data["vibe"].get("secondary"),
-                descriptors=data["vibe"]["descriptors"],
-                confidence=data["vibe"]["confidence"],
+                primary=primary_vibe,
+                secondary=secondary_vibe,
+                descriptors=data["vibe"].get("descriptors", []),
+                confidence=data["vibe"].get("confidence", 0.5),
             )
 
+            # Parse constraints
+            constraints_data = data.get("constraints", {})
             constraints = Constraints(
-                interior_exterior=data["constraints"]["interior_exterior"],
-                time_of_day=data["constraints"]["time_of_day"],
-                special_requirements=data["constraints"].get("special_requirements", []),
+                interior_exterior=constraints_data.get("interior_exterior", "both"),
+                time_of_day=constraints_data.get("time_of_day", "both"),
+                special_requirements=constraints_data.get("special_requirements", []),
             )
+
+            # Build scene number from index
+            scene_number = f"SC_{location_idx:03d}"
 
             return LocationRequirement(
-                scene_id=f"LOC_{location_idx:03d}",
+                project_id=project_id,
+                scene_number=scene_number,
                 scene_header=location.scene_header,
                 page_numbers=location.page_numbers,
+                script_excerpt=location.combined_context[:500],
                 vibe=vibe,
                 constraints=constraints,
-                script_context=location.combined_context[:500],  # Truncate for response
-                estimated_shoot_duration_hours=data.get("estimated_shoot_duration_hours", 8),
-                location_description=data["location_description"],
-                scouting_notes=data["scouting_notes"],
+                estimated_shoot_hours=int(data.get("estimated_shoot_hours", 8)),
+                priority=_normalize_priority(data.get("priority")),
+                target_city=target_city,
+                location_description=data.get("location_description", ""),
+                scouting_notes=data.get("scouting_notes", ""),
             )
 
         except Exception as e:
@@ -123,26 +255,28 @@ async def analyze_location_with_llm(
                 error=str(e),
             )
             if attempt < max_retries - 1:
-                await asyncio.sleep(2 ** attempt)  # Exponential backoff
+                await asyncio.sleep(2 ** attempt)
             else:
                 raise
 
 
 async def process_locations_streaming(
     locations: list[UniqueLocation],
+    project_id: str = "",
+    target_city: str = "Los Angeles, CA",
     max_concurrent: int | None = None,
 ) -> AsyncGenerator[LocationRequirement, None]:
     """
     Process locations in parallel, yielding each result as it completes.
 
-    This allows SSE streaming of results as they become available.
-
     Args:
         locations: List of unique locations to analyze
-        max_concurrent: Maximum concurrent LLM calls (defaults to settings)
+        project_id: Project ID to associate with all requirements
+        target_city: Target city for location search
+        max_concurrent: Maximum concurrent LLM calls (defaults to 5)
 
     Yields:
-        LocationRequirement for each analyzed location
+        LocationRequirement for each analyzed location (Stage 2 compatible)
     """
     if max_concurrent is None:
         max_concurrent = settings.max_concurrent_llm_calls
@@ -153,7 +287,9 @@ async def process_locations_streaming(
     async def process_single(location: UniqueLocation, idx: int) -> None:
         async with semaphore:
             try:
-                result = await analyze_location_with_llm(location, idx)
+                result = await analyze_location_with_llm(
+                    location, idx, project_id=project_id, target_city=target_city
+                )
                 await queue.put((idx, result))
             except Exception as e:
                 logger.error(
@@ -183,53 +319,6 @@ async def process_locations_streaming(
 
     # Ensure all tasks complete
     await asyncio.gather(*tasks, return_exceptions=True)
-
-
-# Pass 1: Name-based - merge obvious duplicates, flag ambiguous ones
-DEDUP_PASS1_PROMPT = """Analyze these screenplay scene headers to identify duplicates.
-
-Scene headers:
-{location_list}
-
-Do TWO things:
-
-1. MERGE headers that CLEARLY refer to the same location based on names:
-   - "MARK'S DORM ROOM" and "MARK'S ROOM" = same (shortened)
-   - "CAMERON AND TYLER'S DORM ROOM" and "TYLER AND CAMERON'S DORM ROOM" = same (name order)
-   - "PORCELLIAN CLUB" and "PORCELLIAN" = same (suffix dropped)
-
-2. FLAG headers that are generic/ambiguous and MIGHT be the same location but need script context to decide:
-   - Generic names like "BEDROOM", "HALLWAY", "KITCHEN", "OFFICE", "CAR"
-   - Only flag if the same generic name appears multiple times
-
-Return JSON:
-{{
-  "merge": {{
-    "canonical_header": ["header1", "header2"]
-  }},
-  "needs_context": ["INT. BEDROOM", "INT. HALLWAY"]
-}}
-
-Only include headers that have duplicates or need context review. Respond with valid JSON only."""
-
-
-# Pass 2: Context-based - decide on flagged ambiguous locations
-DEDUP_PASS2_PROMPT = """These screenplay locations have generic names. Look at the script context to determine if they're the SAME or DIFFERENT physical locations.
-
-{location_contexts}
-
-For each location name, decide based on:
-- Characters present (same characters = likely same place)
-- Setting details mentioned
-- Story continuity
-
-Return JSON with your decision for each:
-{{
-  "INT. BEDROOM": "same",
-  "INT. HALLWAY": "different"
-}}
-
-Respond with valid JSON only."""
 
 
 def _merge_locations(
@@ -275,28 +364,26 @@ async def deduplicate_locations_with_llm(
 
     headers = [loc.scene_header for loc in locations]
     location_list = "\n".join(f"- {h}" for h in headers)
-    header_to_loc = {loc.scene_header: loc for loc in locations}
+
+    config = get_config()
+    client = _get_client()
 
     # === PASS 1: Name-based ===
     needs_context: list[str] = []
     header_to_canonical: dict[str, str] = {}
 
     try:
-        response = await client.chat.completions.create(
-            model=settings.openai_model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You identify duplicate screenplay locations. Respond only with valid JSON.",
-                },
-                {"role": "user", "content": DEDUP_PASS1_PROMPT.format(location_list=location_list)},
-            ],
-            response_format={"type": "json_object"},
-            temperature=0.1,
-        )
+        def _call_dedup_pass1():
+            return client.models.generate_content(
+                model=config.model_name,
+                contents=DEDUP_PASS1_PROMPT.format(location_list=location_list),
+                config=GenerateContentConfig(
+                    response_mime_type="application/json",
+                ),
+            )
 
-        content = response.choices[0].message.content
-        result = json.loads(content)
+        response = await asyncio.to_thread(_call_dedup_pass1)
+        result = _extract_json(response.text)
 
         # Process merges
         merge_groups = result.get("merge", {})
@@ -319,7 +406,6 @@ async def deduplicate_locations_with_llm(
 
     # === PASS 2: Context-based for flagged locations ===
     if needs_context:
-        # Find locations matching the flagged headers
         flagged_groups: dict[str, list[UniqueLocation]] = {}
         for loc in locations:
             if loc.scene_header in needs_context:
@@ -328,13 +414,10 @@ async def deduplicate_locations_with_llm(
                     flagged_groups[base] = []
                 flagged_groups[base].append(loc)
 
-        # Only process if we found matching locations (should always match)
-        # and there are multiple with same header (otherwise nothing to merge)
         groups_to_check = {k: v for k, v in flagged_groups.items() if len(v) > 1}
 
         if groups_to_check:
             try:
-                # Build context for each flagged location
                 context_parts = []
                 for header, locs in groups_to_check.items():
                     context_parts.append(f"\n## {header}")
@@ -344,21 +427,17 @@ async def deduplicate_locations_with_llm(
 
                 location_contexts = "\n".join(context_parts)
 
-                response = await client.chat.completions.create(
-                    model=settings.openai_model,
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": "You analyze screenplay context. Respond only with valid JSON.",
-                        },
-                        {"role": "user", "content": DEDUP_PASS2_PROMPT.format(location_contexts=location_contexts)},
-                    ],
-                    response_format={"type": "json_object"},
-                    temperature=0.1,
-                )
+                def _call_dedup_pass2():
+                    return client.models.generate_content(
+                        model=config.model_name,
+                        contents=DEDUP_PASS2_PROMPT.format(location_contexts=location_contexts),
+                        config=GenerateContentConfig(
+                            response_mime_type="application/json",
+                        ),
+                    )
 
-                content = response.choices[0].message.content
-                decisions = json.loads(content)
+                response = await asyncio.to_thread(_call_dedup_pass2)
+                decisions = _extract_json(response.text)
 
                 # Merge locations decided as "same"
                 header_to_canonical = {}

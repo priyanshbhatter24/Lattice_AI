@@ -41,11 +41,6 @@ class Constraints(BaseModel):
 
     interior_exterior: Literal["interior", "exterior", "both"]
     time_of_day: Literal["day", "night", "both"]
-    min_ceiling_height_ft: float | None = None
-    min_floor_space_sqft: float | None = None
-    parking_spaces_needed: int = 0
-    power_requirements: Literal["standard_120v", "heavy_duty", "generator_ok"] = "standard_120v"
-    acoustic_needs: Literal["dialogue_heavy", "action_ok", "any"] = "any"
     special_requirements: list[str] = Field(default_factory=list)
 
 

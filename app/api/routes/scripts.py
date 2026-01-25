@@ -18,6 +18,8 @@ router = APIRouter(prefix="/api/scripts", tags=["scripts"])
 @router.get("/analyze")
 async def analyze_script(
     file_path: str = Query(..., description="Path to the PDF screenplay file"),
+    project_id: str = Query(default="", description="Project ID to associate with extracted locations"),
+    target_city: str = Query(default="Los Angeles, CA", description="Target city for location search"),
 ):
     """
     Analyze a screenplay PDF and extract location requirements.
@@ -25,9 +27,11 @@ async def analyze_script(
     This endpoint streams results via Server-Sent Events (SSE) as each location
     is analyzed by the LLM workers in parallel.
 
+    The output format is compatible with Stage 2's LocationRequirement input.
+
     Events:
     - status: Progress updates
-    - location: Each analyzed location requirement
+    - location: Each analyzed location requirement (Stage 2 compatible)
     - complete: Final summary when done
     - error: Any errors that occur
     """
@@ -130,7 +134,9 @@ async def analyze_script(
                 }),
             }
 
-            async for location_req in process_locations_streaming(locations):
+            async for location_req in process_locations_streaming(
+                locations, project_id=project_id, target_city=target_city
+            ):
                 processed_count += 1
 
                 yield {

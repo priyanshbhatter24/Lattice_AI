@@ -23,7 +23,7 @@ class GroundingConfig(BaseSettings):
     google_application_credentials: str = ""  # Optional: path to service account JSON
 
     # Gemini model settings (for grounding)
-    model_name: str = "gemini-3-flash-preview"
+    model_name: str = "gemini-2.5-flash"
     api_version: str = "v1"
 
     # Perplexity settings (for visual verification)

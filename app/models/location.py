@@ -1,16 +1,29 @@
+"""
+Location models for Stage 1: Script Analysis.
+
+These models are designed to be compatible with Stage 2's input requirements.
+"""
+
 from typing import Literal
+from uuid import uuid4
 
 from pydantic import BaseModel, Field
+
+# Import shared types from Stage 2 (source of truth)
+from app.grounding.models import VibeCategory
 
 
 class Vibe(BaseModel):
     """Visual/aesthetic classification of a location."""
 
-    primary: str = Field(
-        description="Main aesthetic category: industrial, luxury, suburban, urban-gritty, natural, retro-vintage, futuristic, institutional, commercial, residential"
+    primary: VibeCategory = Field(
+        description="Main aesthetic category"
     )
-    secondary: str | None = Field(default=None, description="Optional secondary aesthetic")
+    secondary: VibeCategory | None = Field(
+        default=None, description="Optional secondary aesthetic"
+    )
     descriptors: list[str] = Field(
+        default_factory=list,
         description="3-5 specific visual descriptors from the script"
     )
     confidence: float = Field(ge=0.0, le=1.0, description="Confidence score 0.0-1.0")
@@ -28,19 +41,40 @@ class Constraints(BaseModel):
 
 
 class LocationRequirement(BaseModel):
-    """Complete location requirement for a scene."""
+    """
+    Complete location requirement for a scene.
 
-    scene_id: str
-    scene_header: str
-    page_numbers: list[int]
+    Compatible with Stage 2's LocationRequirement input format.
+    """
+
+    # Core identifiers
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    project_id: str = Field(default="")
+    scene_number: str = Field(description="Scene number/identifier (e.g., '1', 'SC_001')")
+    scene_header: str = Field(description="Full scene header (e.g., 'INT. WAREHOUSE - NIGHT')")
+    page_numbers: list[int] = Field(default_factory=list)
+    script_excerpt: str = Field(default="", description="Relevant script excerpt for context")
+
+    # Vibe and constraints
     vibe: Vibe
     constraints: Constraints
-    script_context: str = Field(description="Relevant script excerpt for context")
-    estimated_shoot_duration_hours: float
+
+    # Scheduling
+    estimated_shoot_hours: int = Field(default=8, description="Estimated shoot duration in hours")
+    priority: Literal["critical", "important", "flexible"] = "important"
+
+    # Search configuration (can be overridden per-scene or set at project level)
+    target_city: str = "Los Angeles, CA"
+    search_radius_km: float = 50.0
+    max_results: int = 10
+
+    # Scouting notes (Stage 1 enrichment, not required by Stage 2)
     location_description: str = Field(
+        default="",
         description="Detailed description for finding real-world location"
     )
     scouting_notes: str = Field(
+        default="",
         description="Practical notes for location scouts with must-haves and deal-breakers"
     )
 

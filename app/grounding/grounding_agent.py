@@ -142,35 +142,36 @@ class GroundingAgent:
         optimized for Google Maps grounding.
         """
         parts = []
+        used_words = set()  # Track words to avoid duplicates
+
+        def add_part(text: str) -> None:
+            """Add a part if it doesn't duplicate existing words."""
+            words = text.lower().split()
+            # Check if any word is already used
+            if not any(w in used_words for w in words):
+                parts.append(text)
+                used_words.update(words)
 
         # Add vibe-based terms
         vibe_terms = VIBE_SEARCH_TERMS.get(requirement.vibe.primary, [])
         if vibe_terms:
-            parts.append(vibe_terms[0])  # Use primary term
+            add_part(vibe_terms[0])
 
-        # Add descriptors
+        # Add top descriptor
         if requirement.vibe.descriptors:
-            parts.extend(requirement.vibe.descriptors[:2])  # Top 2 descriptors
+            add_part(requirement.vibe.descriptors[0])
 
-        # Add constraint-based modifiers
-        if requirement.constraints.min_ceiling_height_ft and requirement.constraints.min_ceiling_height_ft > 15:
-            parts.append("high ceilings")
-
-        if requirement.constraints.min_floor_space_sqft and requirement.constraints.min_floor_space_sqft > 3000:
-            parts.append("large space")
-
+        # Add "outdoor" for exterior locations
         if requirement.constraints.interior_exterior == "exterior":
-            parts.append("outdoor")
+            add_part("outdoor")
 
-        # Add special requirements
-        for req in requirement.constraints.special_requirements[:2]:
-            parts.append(req)
+        # Add first special requirement
+        if requirement.constraints.special_requirements:
+            add_part(requirement.constraints.special_requirements[0])
 
-        # Combine into query
+        # Combine and add location context
         query = " ".join(parts)
-
-        # Add filming context
-        query = f"{query} venue for filming in {requirement.target_city}"
+        query = f"{query} in {requirement.target_city}"
 
         return query
 
@@ -189,10 +190,7 @@ Find real-world locations that match the following requirements:
 
 **Physical Requirements:**
 - Interior/Exterior: {requirement.constraints.interior_exterior}
-- Minimum ceiling height: {requirement.constraints.min_ceiling_height_ft or 'N/A'} ft
-- Minimum floor space: {requirement.constraints.min_floor_space_sqft or 'N/A'} sqft
-- Parking needed: {requirement.constraints.parking_spaces_needed} spaces
-- Acoustic needs: {requirement.constraints.acoustic_needs}
+- Time of Day: {requirement.constraints.time_of_day}
 - Special requirements: {', '.join(requirement.constraints.special_requirements) or 'None'}
 
 **Instructions:**
@@ -259,12 +257,12 @@ Return ONLY the JSON array, no other text."""
                     project_id=requirement.project_id,
                     venue_name=loc.get("venue_name", "Unknown Venue"),
                     formatted_address=loc.get("formatted_address", ""),
-                    latitude=float(loc.get("latitude", 0)),
-                    longitude=float(loc.get("longitude", 0)),
+                    latitude=float(loc.get("latitude") or 0),
+                    longitude=float(loc.get("longitude") or 0),
                     phone_number=loc.get("phone_number"),
                     website_url=loc.get("website_url"),
-                    google_rating=float(loc.get("google_rating", 0)) if loc.get("google_rating") else None,
-                    google_review_count=int(loc.get("google_review_count", 0)),
+                    google_rating=float(loc.get("google_rating")) if loc.get("google_rating") else None,
+                    google_review_count=int(loc.get("google_review_count") or 0),
                     match_reasoning=loc.get("match_reasoning", ""),
                     google_place_id=loc.get("place_id"),
                 )
@@ -351,30 +349,41 @@ Return ONLY the JSON array, no other text."""
 
         try:
             # Call Gemini with Google Maps grounding
-            response = self.client.models.generate_content(
-                model=self.config.model_name,
-                contents=prompt,
-                config=GenerateContentConfig(
-                    tools=[
-                        Tool(google_maps=GoogleMaps())
-                    ],
-                    tool_config=types.ToolConfig(
-                        retrieval_config=types.RetrievalConfig(
-                            lat_lng=types.LatLng(
-                                latitude=lat,
-                                longitude=lng,
+            # Use asyncio.to_thread to avoid blocking the event loop
+            import asyncio
+
+            def _call_gemini():
+                return self.client.models.generate_content(
+                    model=self.config.model_name,
+                    contents=prompt,
+                    config=GenerateContentConfig(
+                        tools=[
+                            Tool(google_maps=GoogleMaps())
+                        ],
+                        tool_config=types.ToolConfig(
+                            retrieval_config=types.RetrievalConfig(
+                                lat_lng=types.LatLng(
+                                    latitude=lat,
+                                    longitude=lng,
+                                ),
+                                language_code=self.config.language_code,
                             ),
-                            language_code=self.config.language_code,
                         ),
                     ),
-                ),
-            )
+                )
+
+            response = await asyncio.to_thread(_call_gemini)
 
             # Parse the response
             response_text = response.text
-            logger.info("Received response from Gemini", length=len(response_text))
 
-            candidates = self.parse_response(response_text, requirement)
+            if not response_text:
+                logger.warning("Gemini returned empty response", scene=requirement.scene_header)
+                errors.append("Gemini returned empty response - query may be too restrictive")
+                candidates = []
+            else:
+                logger.info("Received response from Gemini", length=len(response_text))
+                candidates = self.parse_response(response_text, requirement)
 
             # Sort by match score
             candidates.sort(key=lambda c: c.match_score, reverse=True)
@@ -673,52 +682,95 @@ Rules for scoring:
 
         return result
 
+    async def _process_single_scene(
+        self,
+        requirement: LocationRequirement,
+        verify_visuals: bool,
+    ) -> GroundingResult:
+        """Process a single scene (helper for parallel processing)."""
+        logger.info(
+            "Processing scene",
+            scene=requirement.scene_header,
+            vibe=requirement.vibe.primary.value,
+        )
+
+        result = await self.find_and_verify_locations(
+            requirement,
+            verify_visuals=verify_visuals,
+            save_to_db=False,
+        )
+
+        logger.info(
+            "Found candidates",
+            scene=requirement.scene_header,
+            count=result.total_found,
+            errors=len(result.errors),
+        )
+
+        return result
+
     async def process_scenes(
         self,
         requirements: list[LocationRequirement],
         verify_visuals: bool = True,
         save_to_db: bool = False,
+        max_concurrent: int = 15,
     ) -> list[GroundingResult]:
         """
         Process multiple scenes with grounding + visual verification.
 
-        This is the main batch entry point. Saves all results at the end.
+        Processes scenes in PARALLEL for faster execution.
 
         Args:
             requirements: List of location requirements to process
             verify_visuals: Whether to run visual vibe verification
             save_to_db: Whether to save results to Supabase
+            max_concurrent: Maximum concurrent API calls (default 5)
         """
-        results = []
+        import asyncio
 
-        for requirement in requirements:
-            logger.info(
-                "Processing scene",
-                scene=requirement.scene_header,
-                vibe=requirement.vibe.primary.value,
-            )
+        # Create semaphore to limit concurrent requests
+        semaphore = asyncio.Semaphore(max_concurrent)
 
-            # Process without saving (we batch save at end)
-            result = await self.find_and_verify_locations(
-                requirement,
-                verify_visuals=verify_visuals,
-                save_to_db=False,
-            )
-            results.append(result)
+        async def process_with_limit(req: LocationRequirement) -> GroundingResult:
+            async with semaphore:
+                return await self._process_single_scene(req, verify_visuals)
 
-            logger.info(
-                "Found candidates",
-                scene=requirement.scene_header,
-                count=result.total_found,
-                errors=len(result.errors),
-            )
+        # Process all scenes in parallel
+        results = await asyncio.gather(
+            *[process_with_limit(req) for req in requirements],
+            return_exceptions=True,
+        )
+
+        # Handle any exceptions
+        final_results = []
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                logger.error(
+                    "Scene processing failed",
+                    scene=requirements[i].scene_header,
+                    error=str(result),
+                )
+                # Create error result
+                final_results.append(GroundingResult(
+                    scene_id=requirements[i].id,
+                    project_id=requirements[i].project_id,
+                    query_used="",
+                    candidates=[],
+                    total_found=0,
+                    filtered_count=0,
+                    processing_time_seconds=0,
+                    errors=[str(result)],
+                ))
+            else:
+                final_results.append(result)
 
         # Batch save all results at end
         if save_to_db:
             if DB_AVAILABLE and save_grounding_results:
-                summary = save_grounding_results(results)
+                summary = save_grounding_results(final_results)
                 logger.info("Batch saved to database", **summary)
             else:
                 logger.warning("Database not available, skipping save")
 
-        return results
+        return final_results
