@@ -143,13 +143,17 @@ function CallsDashboardContent() {
 
   const handleTriggerCall = useCallback(async (candidateId: string) => {
     try {
-      await triggerCall(candidateId);
+      // For testing: override first callable location's phone with test number
+      const isFirstCallable = callableLocations[0]?.id === candidateId;
+      const testPhone = isFirstCallable ? "9095069035" : undefined;
+
+      await triggerCall(candidateId, testPhone);
       // Status will update via real-time subscription
     } catch (err) {
       console.error("Failed to trigger call:", err);
       setError("Failed to trigger call");
     }
-  }, []);
+  }, [callableLocations]);
 
   const handleTriggerBatch = useCallback(async () => {
     if (selectedCallable.length === 0) return;
