@@ -115,7 +115,7 @@ export default function LandingPage() {
           <div className="hero-cta-group">
             <Link href={ctaHref} className="cta-primary">
               {ctaText}
-              <svg viewBox="0 0 20 20" fill="currentColor">
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
                 <path fillRule="evenodd" d="M3 10a.75.75 0 01.75-.75h10.638L10.23 5.29a.75.75 0 111.04-1.08l5.5 5.25a.75.75 0 010 1.08l-5.5 5.25a.75.75 0 11-1.04-1.08l4.158-3.96H3.75A.75.75 0 013 10z" clipRule="evenodd" />
               </svg>
             </Link>
@@ -126,8 +126,8 @@ export default function LandingPage() {
 
           <div className="hero-stats">
             <div className="stat">
-              <span className="stat-value">3</span>
-              <span className="stat-label">Stage Pipeline</span>
+              <span className="stat-value">Agentic</span>
+              <span className="stat-label">Workflow</span>
             </div>
             <div className="stat-divider" />
             <div className="stat">
@@ -234,7 +234,7 @@ export default function LandingPage() {
             </p>
             <Link href={ctaHref} className="cta-button">
               {ctaText}
-              <svg viewBox="0 0 20 20" fill="currentColor">
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
                 <path fillRule="evenodd" d="M3 10a.75.75 0 01.75-.75h10.638L10.23 5.29a.75.75 0 111.04-1.08l5.5 5.25a.75.75 0 010 1.08l-5.5 5.25a.75.75 0 11-1.04-1.08l4.158-3.96H3.75A.75.75 0 013 10z" clipRule="evenodd" />
               </svg>
             </Link>
@@ -492,8 +492,8 @@ export default function LandingPage() {
         .cta-primary {
           display: inline-flex;
           align-items: center;
-          gap: 0.75rem;
-          padding: 1rem 2rem;
+          gap: 0.5rem;
+          padding: 1rem 1.75rem;
           background: #c9a227;
           color: #0a0908;
           font-size: 1rem;
@@ -503,9 +503,10 @@ export default function LandingPage() {
           transition: all 0.3s;
         }
 
-        .cta-primary svg {
+        .cta-primary :global(svg) {
           width: 1.25rem;
           height: 1.25rem;
+          flex-shrink: 0;
           transition: transform 0.3s;
         }
 
@@ -515,7 +516,7 @@ export default function LandingPage() {
           box-shadow: 0 8px 30px rgba(201, 162, 39, 0.3);
         }
 
-        .cta-primary:hover svg {
+        .cta-primary:hover :global(svg) {
           transform: translateX(4px);
         }
 
@@ -555,9 +556,10 @@ export default function LandingPage() {
         .stat-value {
           display: block;
           font-family: var(--font-display), Georgia, serif;
-          font-size: 1.5rem;
+          font-size: 1.25rem;
           font-weight: 600;
           color: #c9a227;
+          white-space: nowrap;
         }
 
         .stat-label {
@@ -746,8 +748,8 @@ export default function LandingPage() {
         .cta-button {
           display: inline-flex;
           align-items: center;
-          gap: 0.75rem;
-          padding: 1rem 2.5rem;
+          gap: 0.5rem;
+          padding: 1rem 2rem;
           background: #c9a227;
           color: #0a0908;
           font-size: 1rem;
@@ -757,9 +759,10 @@ export default function LandingPage() {
           transition: all 0.3s;
         }
 
-        .cta-button svg {
+        .cta-button :global(svg) {
           width: 1.25rem;
           height: 1.25rem;
+          flex-shrink: 0;
           transition: transform 0.3s;
         }
 
@@ -769,7 +772,7 @@ export default function LandingPage() {
           box-shadow: 0 8px 30px rgba(201, 162, 39, 0.3);
         }
 
-        .cta-button:hover svg {
+        .cta-button:hover :global(svg) {
           transform: translateX(4px);
         }
 
