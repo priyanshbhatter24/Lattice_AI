@@ -24,6 +24,7 @@ export default function LocationCandidateCard({
   onViewDetails,
 }: LocationCandidateCardProps) {
   const [expanded, setExpanded] = useState(false);
+  const [concernsExpanded, setConcernsExpanded] = useState(false);
   const [isCallingLoading, setIsCallingLoading] = useState(false);
   const [isApproveLoading, setIsApproveLoading] = useState(false);
   const [showRejectInput, setShowRejectInput] = useState(false);
@@ -40,7 +41,8 @@ export default function LocationCandidateCard({
     candidate.vapi_call_status === "in_progress";
 
   const hasCallResults =
-    candidate.vapi_call_status === "completed" && candidate.venue_available !== undefined;
+    candidate.vapi_call_status === "completed" &&
+    (candidate.venue_available !== undefined || candidate.call_summary);
 
   const canApprove =
     candidate.vapi_call_status === "completed" &&
@@ -246,54 +248,41 @@ export default function LocationCandidateCard({
               </p>
             )}
 
-            {/* Success score */}
-            {candidate.call_success_score !== undefined && (
-              <div
+            {/* Availability details (e.g., "Tuesday at 11:00 AM") */}
+            {candidate.availability_details && candidate.availability_details !== "[]" && (
+              <p
                 style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "0.5rem",
-                  marginTop: "0.5rem",
+                  fontSize: "0.75rem",
+                  color: "var(--color-text-secondary)",
+                  marginTop: "0.375rem",
                 }}
               >
-                <span style={{ fontSize: "0.6875rem", color: "var(--color-text-muted)" }}>
-                  Call quality:
-                </span>
-                <div
-                  style={{
-                    flex: 1,
-                    height: "4px",
-                    backgroundColor: "var(--color-bg-muted)",
-                    borderRadius: "2px",
-                    overflow: "hidden",
-                  }}
-                >
-                  <div
-                    style={{
-                      height: "100%",
-                      width: `${candidate.call_success_score * 100}%`,
-                      backgroundColor:
-                        candidate.call_success_score >= 0.7
-                          ? "var(--color-success)"
-                          : candidate.call_success_score >= 0.4
-                          ? "var(--color-warning)"
-                          : "var(--color-error)",
-                      borderRadius: "2px",
-                    }}
-                  />
-                </div>
-                <span style={{ fontSize: "0.6875rem", color: "var(--color-text-muted)" }}>
-                  {Math.round(candidate.call_success_score * 100)}%
-                </span>
-              </div>
+                Available: {candidate.availability_details}
+              </p>
+            )}
+
+            {/* Call summary - show prominently */}
+            {candidate.call_summary && (
+              <p
+                style={{
+                  fontSize: "0.75rem",
+                  color: "var(--color-text-secondary)",
+                  marginTop: "0.5rem",
+                  lineHeight: 1.4,
+                  fontStyle: "italic",
+                }}
+              >
+                {candidate.call_summary}
+              </p>
             )}
           </div>
         )}
 
-        {/* Red flags */}
+        {/* Red flags (collapsible) */}
         {candidate.red_flags && candidate.red_flags.length > 0 && (
           <div className="red-flags" style={{ marginTop: "0.75rem" }}>
-            <div
+            <button
+              onClick={() => setConcernsExpanded(!concernsExpanded)}
               style={{
                 display: "flex",
                 alignItems: "center",
@@ -303,7 +292,11 @@ export default function LocationCandidateCard({
                 textTransform: "uppercase",
                 letterSpacing: "0.05em",
                 color: "var(--color-error)",
-                marginBottom: "0.375rem",
+                background: "none",
+                border: "none",
+                padding: 0,
+                cursor: "pointer",
+                width: "100%",
               }}
             >
               <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
@@ -311,20 +304,38 @@ export default function LocationCandidateCard({
                 <line x1="12" y1="9" x2="12" y2="13" />
                 <line x1="12" y1="17" x2="12.01" y2="17" />
               </svg>
-              Concerns
-            </div>
-            <ul
-              style={{
-                margin: 0,
-                paddingLeft: "1rem",
-                fontSize: "0.75rem",
-                color: "var(--color-text-secondary)",
-              }}
-            >
-              {candidate.red_flags.map((flag, i) => (
-                <li key={i}>{flag}</li>
-              ))}
-            </ul>
+              Concerns ({candidate.red_flags.length})
+              <svg
+                width={10}
+                height={10}
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={2}
+                style={{
+                  marginLeft: "auto",
+                  transform: concernsExpanded ? "rotate(180deg)" : "rotate(0deg)",
+                  transition: "transform 0.2s ease",
+                }}
+              >
+                <polyline points="6 9 12 15 18 9" />
+              </svg>
+            </button>
+            {concernsExpanded && (
+              <ul
+                style={{
+                  margin: 0,
+                  marginTop: "0.375rem",
+                  paddingLeft: "1rem",
+                  fontSize: "0.75rem",
+                  color: "var(--color-text-secondary)",
+                }}
+              >
+                {candidate.red_flags.map((flag, i) => (
+                  <li key={i}>{flag}</li>
+                ))}
+              </ul>
+            )}
           </div>
         )}
 

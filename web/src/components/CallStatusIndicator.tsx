@@ -125,7 +125,7 @@ export default function CallStatusIndicator({
               ({formatDuration(callDuration)})
             </span>
           )}
-          {status === "completed" && callDuration !== undefined && (
+          {status === "completed" && callDuration !== undefined && callDuration > 0 && (
             <span style={{ marginLeft: "0.25rem", opacity: 0.8 }}>
               {formatDuration(callDuration)}
             </span>

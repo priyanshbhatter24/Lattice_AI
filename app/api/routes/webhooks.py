@@ -42,10 +42,26 @@ async def handle_vapi_webhook(request: Request) -> dict[str, Any]:
     message_type = message.get("type", "unknown")
     call_id = message.get("call", {}).get("id")
 
+    # DEBUG: Print statements to trace webhook flow
+    print(f"\n{'='*60}")
+    print(f"[WEBHOOK] Received webhook type: {message_type}")
+    print(f"[WEBHOOK] Call ID: {call_id}")
+    print(f"[WEBHOOK] Candidate ID: {message.get('call', {}).get('metadata', {}).get('candidate_id')}")
+
+    if message_type == "end-of-call-report":
+        analysis = message.get("analysis", {})
+        print(f"[WEBHOOK] Has analysis: {bool(analysis)}")
+        print(f"[WEBHOOK] Structured Data: {analysis.get('structuredData')}")
+        print(f"[WEBHOOK] Summary: {analysis.get('summary')}")
+        print(f"[WEBHOOK] Call duration: {message.get('call', {}).get('duration')}")
+    print(f"{'='*60}\n")
+
     logger.info(
         "Received Vapi webhook",
         type=message_type,
         call_id=call_id,
+        candidate_id=message.get("call", {}).get("metadata", {}).get("candidate_id"),
+        structured_data=message.get("analysis", {}).get("structuredData") if message_type == "end-of-call-report" else None,
     )
 
     # Handle different webhook types
