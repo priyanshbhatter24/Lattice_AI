@@ -61,6 +61,8 @@ async def analyze_script(
     - complete: Final summary when done
     - error: Any errors that occur
     """
+    print(f"[ANALYZE] Starting analysis for: {file_path}")
+    logger.info("Starting analysis", file_path=file_path)
 
     async def event_generator():
         start_time = time.time()
@@ -69,7 +71,10 @@ async def analyze_script(
         try:
             # Validate file exists
             pdf_path = Path(file_path)
+            print(f"[ANALYZE] Checking file: {pdf_path}, exists={pdf_path.exists()}")
+
             if not pdf_path.exists():
+                print(f"[ANALYZE] ERROR: File not found")
                 yield {
                     "event": "error",
                     "data": json.dumps({"error": f"File not found: {file_path}"}),
@@ -77,6 +82,7 @@ async def analyze_script(
                 return
 
             if not pdf_path.suffix.lower() == ".pdf":
+                print(f"[ANALYZE] ERROR: Not a PDF")
                 yield {
                     "event": "error",
                     "data": json.dumps({"error": "File must be a PDF"}),
@@ -84,14 +90,17 @@ async def analyze_script(
                 return
 
             # Extract text from PDF
+            print("[ANALYZE] Extracting PDF text...")
             yield {
                 "event": "status",
                 "data": json.dumps({"message": "Extracting text from PDF..."}),
             }
 
             pages = extract_text_with_pages(pdf_path)
+            print(f"[ANALYZE] PDF extracted: {len(pages)} pages")
             logger.info("PDF extracted", pages=len(pages), file=file_path)
 
+            print(f"[ANALYZE] Yielding pages status: {len(pages)} pages")
             yield {
                 "event": "status",
                 "data": json.dumps({
@@ -101,6 +110,7 @@ async def analyze_script(
             }
 
             # Find unique locations
+            print("[ANALYZE] Finding unique locations...")
             yield {
                 "event": "status",
                 "data": json.dumps({"message": "Identifying scene locations..."}),
@@ -108,8 +118,10 @@ async def analyze_script(
 
             locations = extract_unique_locations(pages)
             initial_count = len(locations)
+            print(f"[ANALYZE] Found {initial_count} locations")
             logger.info("Locations identified", count=initial_count)
 
+            print(f"[ANALYZE] Yielding dedup status...")
             yield {
                 "event": "status",
                 "data": json.dumps({
@@ -119,8 +131,10 @@ async def analyze_script(
             }
 
             # Deduplicate similar locations using LLM
+            print("[ANALYZE] Starting deduplication with LLM...")
             locations = await deduplicate_locations_with_llm(locations)
             total_locations = len(locations)
+            print(f"[ANALYZE] After dedup: {total_locations} locations")
 
             if total_locations < initial_count:
                 logger.info("Locations deduplicated", before=initial_count, after=total_locations)
@@ -196,12 +210,16 @@ async def analyze_script(
             }
 
         except Exception as e:
+            print(f"[ANALYZE] ERROR: {e}")
+            import traceback
+            traceback.print_exc()
             logger.exception("Error during script analysis", error=str(e))
             yield {
                 "event": "error",
                 "data": json.dumps({"error": str(e)}),
             }
 
+    print("[ANALYZE] Returning EventSourceResponse")
     return EventSourceResponse(event_generator())
 
 

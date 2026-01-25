@@ -1,25 +1,19 @@
 "use client";
 
 import { useState, useCallback, useRef, useEffect } from "react";
-import { uploadScript, analyzeScript, getAvailableScripts, type AvailableScript } from "@/lib/api";
-import type { LocationRequirement, AnalysisProgress } from "@/lib/types";
+import { uploadScript, analyzeScriptWithCallback, getAvailableScripts, type AvailableScript } from "@/lib/api";
+import type { LocationRequirement, AnalysisProgress, SSEEvent } from "@/lib/types";
 
 type AppState = "idle" | "uploading" | "analyzing" | "complete";
 type AnalysisPhase = "connecting" | "extracting" | "identifying" | "deduplicating" | "analyzing" | "complete";
 
-interface AnalysisStep {
-  phase: AnalysisPhase;
-  label: string;
-  detail?: string;
-}
-
-const ANALYSIS_STEPS: AnalysisStep[] = [
+const ANALYSIS_STEPS = [
   { phase: "extracting", label: "Extract PDF" },
   { phase: "identifying", label: "Find Locations" },
   { phase: "deduplicating", label: "Deduplicate" },
   { phase: "analyzing", label: "AI Analysis" },
   { phase: "complete", label: "Complete" },
-];
+] as const;
 
 export default function Home() {
   const [state, setState] = useState<AppState>("idle");
@@ -35,11 +29,8 @@ export default function Home() {
   const [totalLocations, setTotalLocations] = useState<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Load available scripts on mount
   useEffect(() => {
-    getAvailableScripts()
-      .then(setAvailableScripts)
-      .catch(console.error);
+    getAvailableScripts().then(setAvailableScripts).catch(console.error);
   }, []);
 
   const handleFile = useCallback(async (file: File) => {
@@ -88,7 +79,7 @@ export default function Home() {
     setIsDragging(false);
   }, []);
 
-  async function handleAnalyze() {
+  function handleAnalyze() {
     if (!selectedScript) return;
 
     setState("analyzing");
@@ -100,21 +91,21 @@ export default function Home() {
     setPageCount(null);
     setTotalLocations(null);
 
-    try {
-      for await (const event of analyzeScript(selectedScript.path)) {
+    const cleanup = analyzeScriptWithCallback(
+      selectedScript.path,
+      (event: SSEEvent) => {
         switch (event.type) {
           case "status": {
             const msg = event.data.message;
             setStatus(msg);
 
-            // Determine phase from message
             if (msg.includes("Extracting text")) {
               setCurrentPhase("extracting");
             } else if (msg.includes("Extracted") && msg.includes("pages")) {
               setPageCount(event.data.pages || null);
             } else if (msg.includes("Identifying")) {
               setCurrentPhase("identifying");
-            } else if (msg.includes("deduplicating") || msg.includes("Found") && msg.includes("locations")) {
+            } else if (msg.includes("deduplicating") || (msg.includes("Found") && msg.includes("locations"))) {
               setCurrentPhase("deduplicating");
               if (event.data.total) setTotalLocations(event.data.total);
             } else if (msg.includes("Merged to") || msg.includes("unique locations")) {
@@ -140,11 +131,18 @@ export default function Home() {
             setState("idle");
             break;
         }
+      },
+      (err: Error) => {
+        setError(err.message);
+        setState("idle");
+      },
+      () => {
+        // onComplete callback - connection closed normally
       }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "An error occurred");
-      setState("idle");
-    }
+    );
+
+    // Store cleanup function for potential cancellation
+    return cleanup;
   }
 
   function handleReset() {
@@ -188,83 +186,111 @@ export default function Home() {
       <main className="mx-auto max-w-7xl px-6 py-12">
         {/* Script Selection */}
         {!selectedScript && state === "idle" && (
-          <div className="animate-fade-in">
-            <div className="mb-10 text-center">
+          <div className="animate-fade-in mx-auto max-w-2xl">
+            <div className="mb-8 text-center">
               <h2 className="text-4xl font-medium tracking-tight" style={{ fontFamily: "var(--font-display)", color: "var(--color-text)" }}>
                 Analyze Your Screenplay
               </h2>
               <p className="mt-3 text-lg" style={{ color: "var(--color-text-muted)" }}>
-                Extract every location with AI-powered scouting notes
+                Upload a PDF and we&apos;ll extract every location with AI-powered scouting notes
               </p>
             </div>
 
-            <div className="mx-auto max-w-3xl">
-              {/* Available Scripts */}
-              {availableScripts.length > 0 && (
-                <div className="mb-8">
-                  <h3 className="mb-4 text-sm font-medium uppercase tracking-wider" style={{ color: "var(--color-text-subtle)" }}>
-                    Available Scripts
-                  </h3>
-                  <div className="grid gap-3">
-                    {availableScripts.map((script) => (
-                      <button
-                        key={script.path}
-                        onClick={() => handleSelectScript(script)}
-                        className="group flex items-center gap-4 rounded-xl border p-4 text-left transition-all duration-200 hover:border-opacity-60"
-                        style={{ borderColor: "var(--color-border)", background: "var(--color-bg-elevated)" }}
-                      >
-                        <div className="flex h-12 w-12 items-center justify-center rounded-lg" style={{ background: "var(--color-bg-muted)" }}>
-                          <svg className="h-6 w-6 transition-colors" style={{ color: "var(--color-accent)" }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
-                          </svg>
-                        </div>
-                        <div className="flex-1">
-                          <p className="font-medium" style={{ color: "var(--color-text)" }}>{script.filename}</p>
-                          <p className="text-sm" style={{ color: "var(--color-text-subtle)" }}>
-                            {(script.size / 1024 / 1024).toFixed(2)} MB
-                          </p>
-                        </div>
-                        <svg className="h-5 w-5 opacity-0 transition-opacity group-hover:opacity-100" style={{ color: "var(--color-text-muted)" }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3" />
-                        </svg>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Divider */}
-              {availableScripts.length > 0 && (
-                <div className="mb-8 flex items-center gap-4">
-                  <div className="h-px flex-1" style={{ background: "var(--color-border-subtle)" }} />
-                  <span className="text-xs uppercase tracking-wider" style={{ color: "var(--color-text-subtle)" }}>or upload</span>
-                  <div className="h-px flex-1" style={{ background: "var(--color-border-subtle)" }} />
-                </div>
-              )}
-
-              {/* Upload Zone */}
-              <div
-                onDrop={handleDrop}
-                onDragOver={handleDragOver}
-                onDragLeave={handleDragLeave}
-                onClick={() => fileInputRef.current?.click()}
-                className="group relative cursor-pointer overflow-hidden rounded-2xl border-2 border-dashed p-12 text-center transition-all duration-300"
-                style={{
-                  borderColor: isDragging ? "var(--color-accent)" : "var(--color-border)",
-                  background: isDragging ? "var(--color-accent-muted)" : "var(--color-bg-elevated)",
+            {/* Upload Zone */}
+            <div
+              onDrop={handleDrop}
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onClick={() => fileInputRef.current?.click()}
+              className="group relative cursor-pointer overflow-hidden rounded-2xl border-2 border-dashed p-16 text-center transition-all duration-300"
+              style={{
+                borderColor: isDragging ? "var(--color-accent)" : "var(--color-border)",
+                background: isDragging ? "var(--color-accent-muted)" : "var(--color-bg-elevated)",
+              }}
+            >
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".pdf"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) handleFile(f);
                 }}
+              />
+
+              <div
+                className="mx-auto mb-6 flex h-16 w-16 items-center justify-center rounded-2xl transition-transform duration-300 group-hover:scale-110"
+                style={{ background: "var(--color-bg-muted)" }}
               >
-                <input ref={fileInputRef} type="file" accept=".pdf" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); }} />
-                <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-xl transition-transform duration-300 group-hover:scale-110" style={{ background: "var(--color-bg-muted)" }}>
-                  <svg className="h-7 w-7" style={{ color: "var(--color-accent)" }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
-                  </svg>
-                </div>
-                <p className="font-medium" style={{ color: "var(--color-text)" }}>
-                  {isDragging ? "Drop your screenplay" : "Drop PDF here or click to browse"}
-                </p>
+                <svg className="h-8 w-8" style={{ color: "var(--color-accent)" }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m6.75 12l-3-3m0 0l-3 3m3-3v6m-1.5-15H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
+                </svg>
               </div>
+
+              <p className="text-lg font-medium" style={{ color: "var(--color-text)" }}>
+                {isDragging ? "Drop your screenplay" : "Drop screenplay PDF here"}
+              </p>
+              <p className="mt-2 text-sm" style={{ color: "var(--color-text-subtle)" }}>
+                or click to browse
+              </p>
+
+              {/* Decorative corners */}
+              <div className="absolute left-4 top-4 h-8 w-8 border-l-2 border-t-2 opacity-30" style={{ borderColor: "var(--color-accent)" }} />
+              <div className="absolute right-4 top-4 h-8 w-8 border-r-2 border-t-2 opacity-30" style={{ borderColor: "var(--color-accent)" }} />
+              <div className="absolute bottom-4 left-4 h-8 w-8 border-b-2 border-l-2 opacity-30" style={{ borderColor: "var(--color-accent)" }} />
+              <div className="absolute bottom-4 right-4 h-8 w-8 border-b-2 border-r-2 opacity-30" style={{ borderColor: "var(--color-accent)" }} />
             </div>
+
+            {/* Available Scripts Carousel */}
+            {availableScripts.length > 0 && (
+              <div className="mt-10">
+                <p className="mb-4 text-center text-sm" style={{ color: "var(--color-text-subtle)" }}>
+                  or choose from library
+                </p>
+                <div className="flex justify-center gap-4 overflow-x-auto pb-2">
+                  {availableScripts.map((script) => (
+                    <button
+                      key={script.path}
+                      onClick={() => handleSelectScript(script)}
+                      className="group flex flex-col items-center gap-3 rounded-xl p-4 transition-all duration-200 hover:scale-105"
+                      style={{ background: "var(--color-bg-elevated)" }}
+                    >
+                      <div
+                        className="relative flex h-20 w-16 items-center justify-center rounded-lg transition-all duration-200 group-hover:shadow-lg"
+                        style={{ background: "var(--color-bg-muted)" }}
+                      >
+                        {/* PDF Icon */}
+                        <svg className="h-10 w-10" style={{ color: "var(--color-accent)" }} fill="currentColor" viewBox="0 0 24 24">
+                          <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6z" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" />
+                          <path d="M14 2v6h6" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" />
+                          <path d="M9 15h.01M12 15h.01M15 15h.01M9 18h.01M12 18h.01" stroke="currentColor" strokeWidth={2} strokeLinecap="round" />
+                        </svg>
+                        {/* PDF label */}
+                        <div
+                          className="absolute -bottom-1 left-1/2 -translate-x-1/2 rounded px-1.5 py-0.5 text-[10px] font-bold"
+                          style={{ background: "var(--color-accent)", color: "var(--color-bg)" }}
+                        >
+                          PDF
+                        </div>
+                      </div>
+                      <div className="max-w-[120px] text-center">
+                        <p
+                          className="truncate text-xs font-medium"
+                          style={{ color: "var(--color-text)" }}
+                          title={script.filename}
+                        >
+                          {script.filename.replace(".pdf", "")}
+                        </p>
+                        <p className="mt-0.5 text-[10px]" style={{ color: "var(--color-text-subtle)" }}>
+                          {(script.size / 1024 / 1024).toFixed(1)} MB
+                        </p>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -308,7 +334,7 @@ export default function Home() {
                 <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456z" />
                 </svg>
-                Start Analysis
+                Analyze Locations
               </button>
             </div>
           </div>
@@ -318,90 +344,108 @@ export default function Home() {
         {state === "analyzing" && (
           <div className="animate-fade-in">
             {/* Progress Panel */}
-            <div className="mx-auto mb-8 max-w-3xl rounded-2xl border p-6" style={{ borderColor: "var(--color-border-subtle)", background: "var(--color-bg-elevated)" }}>
-              {/* Script name */}
-              <div className="mb-6 flex items-center gap-3">
-                <div className="flex h-10 w-10 items-center justify-center rounded-lg" style={{ background: "var(--color-bg-muted)" }}>
-                  <svg className="h-5 w-5" style={{ color: "var(--color-accent)" }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
-                  </svg>
-                </div>
-                <div>
-                  <p className="font-medium" style={{ color: "var(--color-text)" }}>{selectedScript?.name}</p>
-                  <p className="text-sm" style={{ color: "var(--color-text-subtle)" }}>
-                    {pageCount ? `${pageCount} pages` : "Processing..."}
-                    {totalLocations ? ` · ${totalLocations} locations` : ""}
-                  </p>
-                </div>
+            <div className="mx-auto mb-8 max-w-3xl overflow-hidden rounded-2xl border" style={{ borderColor: "var(--color-border-subtle)", background: "var(--color-bg-elevated)" }}>
+              {/* Animated header bar */}
+              <div className="relative h-1 overflow-hidden" style={{ background: "var(--color-bg-muted)" }}>
+                <div
+                  className="absolute inset-y-0 left-0 w-1/3"
+                  style={{
+                    background: `linear-gradient(90deg, transparent, var(--color-accent), transparent)`,
+                    animation: "shimmer 1.5s infinite",
+                  }}
+                />
               </div>
 
-              {/* Steps */}
-              <div className="mb-6">
-                <div className="flex items-center justify-between">
-                  {ANALYSIS_STEPS.map((step, i) => {
-                    const isActive = i === currentStepIndex;
-                    const isComplete = i < currentStepIndex;
-                    const isPending = i > currentStepIndex;
+              <div className="p-6">
+                {/* Script name */}
+                <div className="mb-6 flex items-center gap-3">
+                  <div className="relative flex h-12 w-12 items-center justify-center rounded-xl" style={{ background: "var(--color-bg-muted)" }}>
+                    <svg className="h-6 w-6" style={{ color: "var(--color-accent)" }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
+                    </svg>
+                    <div className="absolute -right-1 -top-1 h-3 w-3 animate-pulse rounded-full" style={{ background: "var(--color-accent)" }} />
+                  </div>
+                  <div>
+                    <p className="text-lg font-medium" style={{ fontFamily: "var(--font-display)", color: "var(--color-text)" }}>{selectedScript?.name}</p>
+                    <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>
+                      {pageCount ? `${pageCount} pages extracted` : "Reading PDF..."}
+                      {totalLocations ? ` · ${totalLocations} locations found` : ""}
+                    </p>
+                  </div>
+                </div>
 
-                    return (
-                      <div key={step.phase} className="flex flex-1 items-center">
-                        <div className="flex flex-col items-center">
-                          <div
-                            className={`flex h-8 w-8 items-center justify-center rounded-full text-xs font-medium transition-all duration-300 ${isActive ? "scale-110" : ""}`}
-                            style={{
-                              background: isComplete ? "var(--color-success)" : isActive ? "var(--color-accent)" : "var(--color-bg-muted)",
-                              color: isComplete || isActive ? "var(--color-bg)" : "var(--color-text-subtle)",
-                            }}
-                          >
-                            {isComplete ? (
-                              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                              </svg>
-                            ) : isActive ? (
-                              <div className="h-2 w-2 animate-pulse rounded-full bg-current" />
-                            ) : (
-                              i + 1
-                            )}
+                {/* Steps */}
+                <div className="mb-6 rounded-xl p-4" style={{ background: "var(--color-bg-muted)" }}>
+                  <div className="flex items-center justify-between">
+                    {ANALYSIS_STEPS.map((step, i) => {
+                      const isActive = i === currentStepIndex;
+                      const isComplete = i < currentStepIndex;
+                      const isPending = i > currentStepIndex;
+
+                      return (
+                        <div key={step.phase} className="flex flex-1 items-center">
+                          <div className="flex flex-col items-center">
+                            <div
+                              className={`flex h-10 w-10 items-center justify-center rounded-full text-sm font-semibold transition-all duration-300 ${isActive ? "scale-110 shadow-lg" : ""}`}
+                              style={{
+                                background: isComplete ? "var(--color-success)" : isActive ? "var(--color-accent)" : "var(--color-bg-elevated)",
+                                color: isComplete || isActive ? "var(--color-bg)" : "var(--color-text-subtle)",
+                                boxShadow: isActive ? "0 0 20px var(--color-accent)" : "none",
+                              }}
+                            >
+                              {isComplete ? (
+                                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                                </svg>
+                              ) : isActive ? (
+                                <div className="h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                              ) : (
+                                i + 1
+                              )}
+                            </div>
+                            <span
+                              className="mt-2 text-xs font-medium whitespace-nowrap"
+                              style={{ color: isActive ? "var(--color-text)" : isPending ? "var(--color-text-subtle)" : "var(--color-text-muted)" }}
+                            >
+                              {step.label}
+                            </span>
                           </div>
-                          <span
-                            className="mt-2 text-xs font-medium"
-                            style={{ color: isActive ? "var(--color-text)" : isPending ? "var(--color-text-subtle)" : "var(--color-text-muted)" }}
-                          >
-                            {step.label}
-                          </span>
+                          {i < ANALYSIS_STEPS.length - 1 && (
+                            <div
+                              className="mx-1 h-0.5 flex-1 rounded-full transition-all duration-500"
+                              style={{ background: isComplete ? "var(--color-success)" : "var(--color-border)" }}
+                            />
+                          )}
                         </div>
-                        {i < ANALYSIS_STEPS.length - 1 && (
-                          <div
-                            className="mx-2 h-0.5 flex-1 transition-all duration-500"
-                            style={{ background: isComplete ? "var(--color-success)" : "var(--color-border-subtle)" }}
-                          />
-                        )}
-                      </div>
-                    );
-                  })}
+                      );
+                    })}
+                  </div>
                 </div>
-              </div>
 
-              {/* Current Status */}
-              <div className="rounded-lg p-4" style={{ background: "var(--color-bg-muted)" }}>
-                <div className="flex items-center gap-3">
-                  <div className="h-2 w-2 animate-pulse rounded-full" style={{ background: "var(--color-accent)" }} />
-                  <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>{status}</p>
+                {/* Current Status */}
+                <div className="flex items-center gap-3 rounded-lg px-4 py-3" style={{ background: "var(--color-bg)" }}>
+                  <div className="flex h-8 w-8 items-center justify-center rounded-full" style={{ background: "var(--color-accent-muted)" }}>
+                    <div className="h-2 w-2 animate-pulse rounded-full" style={{ background: "var(--color-accent)" }} />
+                  </div>
+                  <p className="flex-1 text-sm font-medium" style={{ color: "var(--color-text)" }}>{status || "Initializing..."}</p>
                 </div>
 
                 {/* Location Progress */}
                 {progress && (
                   <div className="mt-4">
-                    <div className="mb-2 flex items-center justify-between text-xs" style={{ color: "var(--color-text-subtle)" }}>
-                      <span>Analyzing locations</span>
-                      <span>{progress.processed} / {progress.total}</span>
+                    <div className="mb-2 flex items-center justify-between text-sm" style={{ color: "var(--color-text-muted)" }}>
+                      <span>Analyzing locations with AI</span>
+                      <span className="font-medium" style={{ color: "var(--color-accent)" }}>{progress.processed} / {progress.total}</span>
                     </div>
-                    <div className="h-2 overflow-hidden rounded-full" style={{ background: "var(--color-bg)" }}>
+                    <div className="h-3 overflow-hidden rounded-full" style={{ background: "var(--color-bg)" }}>
                       <div
-                        className="h-full transition-all duration-500 ease-out"
-                        style={{ width: `${progress.percent}%`, background: "var(--color-accent)" }}
+                        className="h-full rounded-full transition-all duration-500 ease-out"
+                        style={{ width: `${progress.percent}%`, background: "linear-gradient(90deg, var(--color-accent-muted), var(--color-accent))" }}
                       />
                     </div>
+                    <p className="mt-2 text-xs" style={{ color: "var(--color-text-subtle)" }}>
+                      {Math.round(progress.percent)}% complete
+                    </p>
                   </div>
                 )}
               </div>
@@ -422,7 +466,6 @@ export default function Home() {
         {/* Complete State */}
         {state === "complete" && (
           <div className="animate-fade-in">
-            {/* Summary Header */}
             <div className="mb-8 flex items-center justify-between">
               <div>
                 <h2 className="text-2xl font-medium" style={{ fontFamily: "var(--font-display)", color: "var(--color-text)" }}>
@@ -484,7 +527,6 @@ function LocationCard({ location }: { location: LocationRequirement }) {
       className="group overflow-hidden rounded-xl border transition-all duration-300"
       style={{ borderColor: "var(--color-border-subtle)", background: "var(--color-bg-elevated)" }}
     >
-      {/* Header */}
       <div className="flex items-center justify-between px-4 py-2.5 text-xs font-medium uppercase tracking-wider" style={{ background: "var(--color-bg-muted)", color: "var(--color-text-subtle)" }}>
         <div className="flex items-center gap-2">
           <span className="flex items-center gap-1" style={{ color: isInterior ? "var(--color-accent)" : "var(--color-text-muted)" }}>
@@ -514,7 +556,6 @@ function LocationCard({ location }: { location: LocationRequirement }) {
           {location.location_description}
         </p>
 
-        {/* Tags */}
         <div className="mt-3 flex flex-wrap gap-1.5">
           <span className="rounded-md px-2 py-0.5 text-xs font-medium" style={{ background: "var(--color-accent-muted)", color: "var(--color-accent)" }}>
             {location.vibe.primary}
@@ -526,7 +567,6 @@ function LocationCard({ location }: { location: LocationRequirement }) {
           ))}
         </div>
 
-        {/* Expand Button */}
         <button
           onClick={() => setExpanded(!expanded)}
           className="mt-3 flex w-full items-center justify-between py-2 text-xs font-medium transition-colors"
@@ -538,7 +578,6 @@ function LocationCard({ location }: { location: LocationRequirement }) {
           </svg>
         </button>
 
-        {/* Expanded */}
         {expanded && (
           <div className="animate-fade-in mt-3 space-y-4 border-t pt-4" style={{ borderColor: "var(--color-border-subtle)" }}>
             <div>
