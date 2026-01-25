@@ -1,9 +1,11 @@
 import json
 import time
+import tempfile
+import shutil
 from pathlib import Path
 
 import structlog
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, UploadFile, File
 from sse_starlette.sse import EventSourceResponse
 
 from app.services.pdf_parser import extract_text_with_pages
@@ -13,6 +15,34 @@ from app.services.llm_worker import deduplicate_locations_with_llm, process_loca
 
 logger = structlog.get_logger()
 router = APIRouter(prefix="/api/scripts", tags=["scripts"])
+
+# Store uploaded files temporarily
+UPLOAD_DIR = Path(tempfile.gettempdir()) / "location-scout-uploads"
+UPLOAD_DIR.mkdir(exist_ok=True)
+
+
+@router.post("/upload")
+async def upload_script(file: UploadFile = File(...)):
+    """
+    Upload a screenplay PDF for analysis.
+    Returns the temporary file path to use with /analyze.
+    """
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="File must be a PDF")
+
+    # Save to temp directory
+    file_path = UPLOAD_DIR / f"{int(time.time())}_{file.filename}"
+
+    with open(file_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+
+    logger.info("File uploaded", filename=file.filename, path=str(file_path))
+
+    return {
+        "filename": file.filename,
+        "path": str(file_path),
+        "size": file_path.stat().st_size,
+    }
 
 
 @router.get("/analyze")
@@ -173,6 +203,28 @@ async def analyze_script(
             }
 
     return EventSourceResponse(event_generator())
+
+
+@router.get("/available")
+async def list_available_scripts():
+    """
+    List PDF scripts available in the project directory.
+    """
+    # Look for PDFs in the project root
+    project_root = Path(__file__).parent.parent.parent.parent
+    scripts = []
+
+    for pdf_file in project_root.glob("*.pdf"):
+        scripts.append({
+            "filename": pdf_file.name,
+            "path": str(pdf_file.absolute()),
+            "size": pdf_file.stat().st_size,
+        })
+
+    # Sort by filename
+    scripts.sort(key=lambda x: x["filename"])
+
+    return {"scripts": scripts}
 
 
 @router.get("/health")

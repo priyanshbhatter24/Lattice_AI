@@ -1,32 +1,129 @@
 "use client";
 
-import { useState } from "react";
-import { analyzeScript } from "@/lib/api";
+import { useState, useCallback, useRef, useEffect } from "react";
+import { uploadScript, analyzeScript, getAvailableScripts, type AvailableScript } from "@/lib/api";
 import type { LocationRequirement, AnalysisProgress } from "@/lib/types";
 
+type AppState = "idle" | "uploading" | "analyzing" | "complete";
+type AnalysisPhase = "connecting" | "extracting" | "identifying" | "deduplicating" | "analyzing" | "complete";
+
+interface AnalysisStep {
+  phase: AnalysisPhase;
+  label: string;
+  detail?: string;
+}
+
+const ANALYSIS_STEPS: AnalysisStep[] = [
+  { phase: "extracting", label: "Extract PDF" },
+  { phase: "identifying", label: "Find Locations" },
+  { phase: "deduplicating", label: "Deduplicate" },
+  { phase: "analyzing", label: "AI Analysis" },
+  { phase: "complete", label: "Complete" },
+];
+
 export default function Home() {
-  const [filePath, setFilePath] = useState("");
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [state, setState] = useState<AppState>("idle");
+  const [selectedScript, setSelectedScript] = useState<{ name: string; path: string } | null>(null);
+  const [availableScripts, setAvailableScripts] = useState<AvailableScript[]>([]);
   const [status, setStatus] = useState("");
+  const [currentPhase, setCurrentPhase] = useState<AnalysisPhase>("connecting");
   const [progress, setProgress] = useState<AnalysisProgress | null>(null);
   const [locations, setLocations] = useState<LocationRequirement[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const [pageCount, setPageCount] = useState<number | null>(null);
+  const [totalLocations, setTotalLocations] = useState<number | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Load available scripts on mount
+  useEffect(() => {
+    getAvailableScripts()
+      .then(setAvailableScripts)
+      .catch(console.error);
+  }, []);
+
+  const handleFile = useCallback(async (file: File) => {
+    if (!file.name.toLowerCase().endsWith(".pdf")) {
+      setError("Please select a PDF file");
+      return;
+    }
+
+    setError(null);
+    setState("uploading");
+    setStatus("Uploading screenplay...");
+
+    try {
+      const result = await uploadScript(file);
+      setSelectedScript({ name: file.name, path: result.path });
+      setStatus("Ready to analyze");
+      setState("idle");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Upload failed");
+      setState("idle");
+    }
+  }, []);
+
+  const handleSelectScript = useCallback((script: AvailableScript) => {
+    setSelectedScript({ name: script.filename, path: script.path });
+    setError(null);
+  }, []);
+
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      setIsDragging(false);
+      const droppedFile = e.dataTransfer.files[0];
+      if (droppedFile) handleFile(droppedFile);
+    },
+    [handleFile]
+  );
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(true);
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+  }, []);
 
   async function handleAnalyze() {
-    if (!filePath.trim()) return;
+    if (!selectedScript) return;
 
-    setIsAnalyzing(true);
-    setStatus("");
+    setState("analyzing");
+    setCurrentPhase("connecting");
+    setStatus("Connecting...");
     setProgress(null);
     setLocations([]);
     setError(null);
+    setPageCount(null);
+    setTotalLocations(null);
 
     try {
-      for await (const event of analyzeScript(filePath)) {
+      for await (const event of analyzeScript(selectedScript.path)) {
         switch (event.type) {
-          case "status":
-            setStatus(event.data.message);
+          case "status": {
+            const msg = event.data.message;
+            setStatus(msg);
+
+            // Determine phase from message
+            if (msg.includes("Extracting text")) {
+              setCurrentPhase("extracting");
+            } else if (msg.includes("Extracted") && msg.includes("pages")) {
+              setPageCount(event.data.pages || null);
+            } else if (msg.includes("Identifying")) {
+              setCurrentPhase("identifying");
+            } else if (msg.includes("deduplicating") || msg.includes("Found") && msg.includes("locations")) {
+              setCurrentPhase("deduplicating");
+              if (event.data.total) setTotalLocations(event.data.total);
+            } else if (msg.includes("Merged to") || msg.includes("unique locations")) {
+              if (event.data.total) setTotalLocations(event.data.total);
+            } else if (msg.includes("Analyzing locations")) {
+              setCurrentPhase("analyzing");
+            }
             break;
+          }
           case "location":
             setLocations((prev) => [...prev, event.data]);
             break;
@@ -34,88 +131,344 @@ export default function Home() {
             setProgress(event.data);
             break;
           case "complete":
-            setStatus(
-              `Complete! Analyzed ${event.data.total_locations} locations in ${event.data.processing_time_seconds}s`
-            );
+            setCurrentPhase("complete");
+            setStatus(`Analyzed ${event.data.total_locations} locations in ${event.data.processing_time_seconds}s`);
+            setState("complete");
             break;
           case "error":
             setError(event.data.error);
+            setState("idle");
             break;
         }
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "An error occurred");
-    } finally {
-      setIsAnalyzing(false);
+      setState("idle");
     }
   }
 
+  function handleReset() {
+    setSelectedScript(null);
+    setStatus("");
+    setCurrentPhase("connecting");
+    setProgress(null);
+    setLocations([]);
+    setError(null);
+    setState("idle");
+    setPageCount(null);
+    setTotalLocations(null);
+  }
+
+  const currentStepIndex = ANALYSIS_STEPS.findIndex((s) => s.phase === currentPhase);
+
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100">
-      <div className="mx-auto max-w-6xl px-6 py-12">
-        <header className="mb-12">
-          <h1 className="text-3xl font-bold tracking-tight">Location Scout</h1>
-          <p className="mt-2 text-zinc-400">
-            AI-powered location analysis for film production
-          </p>
-        </header>
-
-        <div className="mb-8 flex gap-4">
-          <input
-            type="text"
-            value={filePath}
-            onChange={(e) => setFilePath(e.target.value)}
-            placeholder="Path to screenplay PDF..."
-            className="flex-1 rounded-lg border border-zinc-800 bg-zinc-900 px-4 py-3 text-zinc-100 placeholder-zinc-500 focus:border-zinc-700 focus:outline-none"
-            disabled={isAnalyzing}
-          />
-          <button
-            onClick={handleAnalyze}
-            disabled={isAnalyzing || !filePath.trim()}
-            className="rounded-lg bg-zinc-100 px-6 py-3 font-medium text-zinc-900 transition hover:bg-zinc-200 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {isAnalyzing ? "Analyzing..." : "Analyze"}
-          </button>
+    <div className="min-h-screen" style={{ background: "var(--color-bg)" }}>
+      {/* Header */}
+      <header className="border-b px-6 py-5" style={{ borderColor: "var(--color-border-subtle)" }}>
+        <div className="mx-auto flex max-w-7xl items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg" style={{ background: "var(--color-accent)" }}>
+              <svg className="h-5 w-5" style={{ color: "var(--color-bg)" }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z" />
+                <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z" />
+              </svg>
+            </div>
+            <h1 className="text-lg font-semibold tracking-tight" style={{ fontFamily: "var(--font-display)", color: "var(--color-text)" }}>
+              Location Scout
+            </h1>
+          </div>
+          {(selectedScript || state !== "idle") && (
+            <button onClick={handleReset} className="text-sm transition-colors hover:opacity-80" style={{ color: "var(--color-text-muted)" }}>
+              Start Over
+            </button>
+          )}
         </div>
+      </header>
 
-        {(status || progress) && (
-          <div className="mb-8 rounded-lg border border-zinc-800 bg-zinc-900 p-4">
-            <p className="text-sm text-zinc-300">{status}</p>
-            {progress && (
-              <div className="mt-3">
-                <div className="h-2 overflow-hidden rounded-full bg-zinc-800">
-                  <div
-                    className="h-full bg-zinc-100 transition-all duration-300"
-                    style={{ width: `${progress.percent}%` }}
-                  />
+      <main className="mx-auto max-w-7xl px-6 py-12">
+        {/* Script Selection */}
+        {!selectedScript && state === "idle" && (
+          <div className="animate-fade-in">
+            <div className="mb-10 text-center">
+              <h2 className="text-4xl font-medium tracking-tight" style={{ fontFamily: "var(--font-display)", color: "var(--color-text)" }}>
+                Analyze Your Screenplay
+              </h2>
+              <p className="mt-3 text-lg" style={{ color: "var(--color-text-muted)" }}>
+                Extract every location with AI-powered scouting notes
+              </p>
+            </div>
+
+            <div className="mx-auto max-w-3xl">
+              {/* Available Scripts */}
+              {availableScripts.length > 0 && (
+                <div className="mb-8">
+                  <h3 className="mb-4 text-sm font-medium uppercase tracking-wider" style={{ color: "var(--color-text-subtle)" }}>
+                    Available Scripts
+                  </h3>
+                  <div className="grid gap-3">
+                    {availableScripts.map((script) => (
+                      <button
+                        key={script.path}
+                        onClick={() => handleSelectScript(script)}
+                        className="group flex items-center gap-4 rounded-xl border p-4 text-left transition-all duration-200 hover:border-opacity-60"
+                        style={{ borderColor: "var(--color-border)", background: "var(--color-bg-elevated)" }}
+                      >
+                        <div className="flex h-12 w-12 items-center justify-center rounded-lg" style={{ background: "var(--color-bg-muted)" }}>
+                          <svg className="h-6 w-6 transition-colors" style={{ color: "var(--color-accent)" }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
+                          </svg>
+                        </div>
+                        <div className="flex-1">
+                          <p className="font-medium" style={{ color: "var(--color-text)" }}>{script.filename}</p>
+                          <p className="text-sm" style={{ color: "var(--color-text-subtle)" }}>
+                            {(script.size / 1024 / 1024).toFixed(2)} MB
+                          </p>
+                        </div>
+                        <svg className="h-5 w-5 opacity-0 transition-opacity group-hover:opacity-100" style={{ color: "var(--color-text-muted)" }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3" />
+                        </svg>
+                      </button>
+                    ))}
+                  </div>
                 </div>
-                <p className="mt-2 text-xs text-zinc-500">
-                  {progress.processed} / {progress.total} locations
+              )}
+
+              {/* Divider */}
+              {availableScripts.length > 0 && (
+                <div className="mb-8 flex items-center gap-4">
+                  <div className="h-px flex-1" style={{ background: "var(--color-border-subtle)" }} />
+                  <span className="text-xs uppercase tracking-wider" style={{ color: "var(--color-text-subtle)" }}>or upload</span>
+                  <div className="h-px flex-1" style={{ background: "var(--color-border-subtle)" }} />
+                </div>
+              )}
+
+              {/* Upload Zone */}
+              <div
+                onDrop={handleDrop}
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onClick={() => fileInputRef.current?.click()}
+                className="group relative cursor-pointer overflow-hidden rounded-2xl border-2 border-dashed p-12 text-center transition-all duration-300"
+                style={{
+                  borderColor: isDragging ? "var(--color-accent)" : "var(--color-border)",
+                  background: isDragging ? "var(--color-accent-muted)" : "var(--color-bg-elevated)",
+                }}
+              >
+                <input ref={fileInputRef} type="file" accept=".pdf" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); }} />
+                <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-xl transition-transform duration-300 group-hover:scale-110" style={{ background: "var(--color-bg-muted)" }}>
+                  <svg className="h-7 w-7" style={{ color: "var(--color-accent)" }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
+                  </svg>
+                </div>
+                <p className="font-medium" style={{ color: "var(--color-text)" }}>
+                  {isDragging ? "Drop your screenplay" : "Drop PDF here or click to browse"}
                 </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Uploading State */}
+        {state === "uploading" && (
+          <div className="animate-fade-in mx-auto max-w-2xl text-center">
+            <div className="flex items-center justify-center gap-3">
+              <div className="h-5 w-5 animate-spin rounded-full border-2 border-t-transparent" style={{ borderColor: "var(--color-accent)", borderTopColor: "transparent" }} />
+              <p style={{ color: "var(--color-text-muted)" }}>{status}</p>
+            </div>
+          </div>
+        )}
+
+        {/* Script Selected - Ready to Analyze */}
+        {selectedScript && state === "idle" && (
+          <div className="animate-fade-in mx-auto max-w-2xl">
+            <div className="mb-8 rounded-2xl border p-6" style={{ borderColor: "var(--color-border-subtle)", background: "var(--color-bg-elevated)" }}>
+              <div className="flex items-center gap-4">
+                <div className="flex h-14 w-14 items-center justify-center rounded-xl" style={{ background: "var(--color-bg-muted)" }}>
+                  <svg className="h-7 w-7" style={{ color: "var(--color-accent)" }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
+                  </svg>
+                </div>
+                <div className="flex-1">
+                  <h3 className="text-xl font-medium" style={{ fontFamily: "var(--font-display)", color: "var(--color-text)" }}>
+                    {selectedScript.name}
+                  </h3>
+                  <p className="mt-1 text-sm" style={{ color: "var(--color-text-subtle)" }}>
+                    Ready to analyze
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="text-center">
+              <button
+                onClick={handleAnalyze}
+                className="inline-flex items-center gap-3 rounded-xl px-8 py-4 text-lg font-medium transition-all duration-200 hover:scale-[1.02] active:scale-[0.98]"
+                style={{ background: "var(--color-accent)", color: "var(--color-bg)" }}
+              >
+                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456z" />
+                </svg>
+                Start Analysis
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Analyzing State */}
+        {state === "analyzing" && (
+          <div className="animate-fade-in">
+            {/* Progress Panel */}
+            <div className="mx-auto mb-8 max-w-3xl rounded-2xl border p-6" style={{ borderColor: "var(--color-border-subtle)", background: "var(--color-bg-elevated)" }}>
+              {/* Script name */}
+              <div className="mb-6 flex items-center gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-lg" style={{ background: "var(--color-bg-muted)" }}>
+                  <svg className="h-5 w-5" style={{ color: "var(--color-accent)" }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
+                  </svg>
+                </div>
+                <div>
+                  <p className="font-medium" style={{ color: "var(--color-text)" }}>{selectedScript?.name}</p>
+                  <p className="text-sm" style={{ color: "var(--color-text-subtle)" }}>
+                    {pageCount ? `${pageCount} pages` : "Processing..."}
+                    {totalLocations ? ` · ${totalLocations} locations` : ""}
+                  </p>
+                </div>
+              </div>
+
+              {/* Steps */}
+              <div className="mb-6">
+                <div className="flex items-center justify-between">
+                  {ANALYSIS_STEPS.map((step, i) => {
+                    const isActive = i === currentStepIndex;
+                    const isComplete = i < currentStepIndex;
+                    const isPending = i > currentStepIndex;
+
+                    return (
+                      <div key={step.phase} className="flex flex-1 items-center">
+                        <div className="flex flex-col items-center">
+                          <div
+                            className={`flex h-8 w-8 items-center justify-center rounded-full text-xs font-medium transition-all duration-300 ${isActive ? "scale-110" : ""}`}
+                            style={{
+                              background: isComplete ? "var(--color-success)" : isActive ? "var(--color-accent)" : "var(--color-bg-muted)",
+                              color: isComplete || isActive ? "var(--color-bg)" : "var(--color-text-subtle)",
+                            }}
+                          >
+                            {isComplete ? (
+                              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                              </svg>
+                            ) : isActive ? (
+                              <div className="h-2 w-2 animate-pulse rounded-full bg-current" />
+                            ) : (
+                              i + 1
+                            )}
+                          </div>
+                          <span
+                            className="mt-2 text-xs font-medium"
+                            style={{ color: isActive ? "var(--color-text)" : isPending ? "var(--color-text-subtle)" : "var(--color-text-muted)" }}
+                          >
+                            {step.label}
+                          </span>
+                        </div>
+                        {i < ANALYSIS_STEPS.length - 1 && (
+                          <div
+                            className="mx-2 h-0.5 flex-1 transition-all duration-500"
+                            style={{ background: isComplete ? "var(--color-success)" : "var(--color-border-subtle)" }}
+                          />
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Current Status */}
+              <div className="rounded-lg p-4" style={{ background: "var(--color-bg-muted)" }}>
+                <div className="flex items-center gap-3">
+                  <div className="h-2 w-2 animate-pulse rounded-full" style={{ background: "var(--color-accent)" }} />
+                  <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>{status}</p>
+                </div>
+
+                {/* Location Progress */}
+                {progress && (
+                  <div className="mt-4">
+                    <div className="mb-2 flex items-center justify-between text-xs" style={{ color: "var(--color-text-subtle)" }}>
+                      <span>Analyzing locations</span>
+                      <span>{progress.processed} / {progress.total}</span>
+                    </div>
+                    <div className="h-2 overflow-hidden rounded-full" style={{ background: "var(--color-bg)" }}>
+                      <div
+                        className="h-full transition-all duration-500 ease-out"
+                        style={{ width: `${progress.percent}%`, background: "var(--color-accent)" }}
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Locations as they stream in */}
+            {locations.length > 0 && (
+              <div>
+                <h2 className="mb-4 text-lg font-medium" style={{ fontFamily: "var(--font-display)", color: "var(--color-text)" }}>
+                  Locations Found ({locations.length})
+                </h2>
+                <LocationGrid locations={locations} />
               </div>
             )}
           </div>
         )}
 
-        {error && (
-          <div className="mb-8 rounded-lg border border-red-900 bg-red-950 p-4">
-            <p className="text-sm text-red-400">{error}</p>
+        {/* Complete State */}
+        {state === "complete" && (
+          <div className="animate-fade-in">
+            {/* Summary Header */}
+            <div className="mb-8 flex items-center justify-between">
+              <div>
+                <h2 className="text-2xl font-medium" style={{ fontFamily: "var(--font-display)", color: "var(--color-text)" }}>
+                  {locations.length} Locations Analyzed
+                </h2>
+                <p className="mt-1 text-sm" style={{ color: "var(--color-text-subtle)" }}>
+                  {selectedScript?.name} · {status}
+                </p>
+              </div>
+              <div className="flex items-center gap-2 rounded-full px-4 py-2" style={{ background: "rgba(34, 197, 94, 0.1)" }}>
+                <svg className="h-4 w-4" style={{ color: "var(--color-success)" }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                </svg>
+                <span className="text-sm font-medium" style={{ color: "var(--color-success)" }}>Complete</span>
+              </div>
+            </div>
+
+            <LocationGrid locations={locations} />
           </div>
         )}
 
-        {locations.length > 0 && (
-          <div className="space-y-4">
-            <h2 className="text-xl font-semibold">
-              Locations ({locations.length})
-            </h2>
-            <div className="grid gap-4">
-              {locations.map((loc) => (
-                <LocationCard key={loc.scene_id} location={loc} />
-              ))}
+        {/* Error State */}
+        {error && (
+          <div className="animate-fade-in mx-auto mt-6 max-w-2xl rounded-xl border p-4" style={{ borderColor: "var(--color-error)", background: "rgba(239, 68, 68, 0.1)" }}>
+            <div className="flex items-start gap-3">
+              <svg className="mt-0.5 h-5 w-5 flex-shrink-0" style={{ color: "var(--color-error)" }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
+              </svg>
+              <div>
+                <p className="font-medium" style={{ color: "var(--color-error)" }}>Analysis Error</p>
+                <p className="mt-1 text-sm" style={{ color: "var(--color-error)" }}>{error}</p>
+              </div>
             </div>
           </div>
         )}
-      </div>
+      </main>
+    </div>
+  );
+}
+
+function LocationGrid({ locations }: { locations: LocationRequirement[] }) {
+  return (
+    <div className="stagger-children grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+      {locations.map((loc) => (
+        <LocationCard key={loc.scene_id} location={loc} />
+      ))}
     </div>
   );
 }
@@ -123,97 +476,106 @@ export default function Home() {
 function LocationCard({ location }: { location: LocationRequirement }) {
   const [expanded, setExpanded] = useState(false);
 
+  const isInterior = location.constraints.interior_exterior === "interior";
+  const isDay = location.constraints.time_of_day === "day";
+
   return (
-    <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-5">
-      <div className="flex items-start justify-between">
-        <div>
-          <h3 className="font-medium">{location.scene_header}</h3>
-          <div className="mt-1 flex flex-wrap gap-2 text-xs">
-            <span className="rounded bg-zinc-800 px-2 py-1">
-              {location.constraints.interior_exterior}
-            </span>
-            <span className="rounded bg-zinc-800 px-2 py-1">
-              {location.constraints.time_of_day}
-            </span>
-            <span className="rounded bg-zinc-800 px-2 py-1">
-              Pages: {location.page_numbers.join(", ")}
-            </span>
-          </div>
+    <div
+      className="group overflow-hidden rounded-xl border transition-all duration-300"
+      style={{ borderColor: "var(--color-border-subtle)", background: "var(--color-bg-elevated)" }}
+    >
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-2.5 text-xs font-medium uppercase tracking-wider" style={{ background: "var(--color-bg-muted)", color: "var(--color-text-subtle)" }}>
+        <div className="flex items-center gap-2">
+          <span className="flex items-center gap-1" style={{ color: isInterior ? "var(--color-accent)" : "var(--color-text-muted)" }}>
+            {isInterior ? (
+              <svg className="h-3.5 w-3.5" fill="currentColor" viewBox="0 0 20 20">
+                <path d="M10.707 2.293a1 1 0 00-1.414 0l-7 7a1 1 0 001.414 1.414L4 10.414V17a1 1 0 001 1h2a1 1 0 001-1v-2a1 1 0 011-1h2a1 1 0 011 1v2a1 1 0 001 1h2a1 1 0 001-1v-6.586l.293.293a1 1 0 001.414-1.414l-7-7z" />
+              </svg>
+            ) : (
+              <svg className="h-3.5 w-3.5" fill="currentColor" viewBox="0 0 20 20">
+                <path d="M5.5 16a3.5 3.5 0 01-.369-6.98 4 4 0 117.753-1.977A4.5 4.5 0 1113.5 16h-8z" />
+              </svg>
+            )}
+            {location.constraints.interior_exterior}
+          </span>
+          <span style={{ color: "var(--color-border)" }}>·</span>
+          <span style={{ color: isDay ? "#fbbf24" : "#818cf8" }}>{location.constraints.time_of_day}</span>
         </div>
+        <span>pg {location.page_numbers.join(", ")}</span>
+      </div>
+
+      <div className="p-4">
+        <h3 className="font-medium leading-snug" style={{ fontFamily: "var(--font-display)", color: "var(--color-text)", fontSize: "1.05rem" }}>
+          {location.scene_header}
+        </h3>
+
+        <p className="mt-2 line-clamp-2 text-sm leading-relaxed" style={{ color: "var(--color-text-muted)" }}>
+          {location.location_description}
+        </p>
+
+        {/* Tags */}
+        <div className="mt-3 flex flex-wrap gap-1.5">
+          <span className="rounded-md px-2 py-0.5 text-xs font-medium" style={{ background: "var(--color-accent-muted)", color: "var(--color-accent)" }}>
+            {location.vibe.primary}
+          </span>
+          {location.vibe.descriptors.slice(0, 2).map((desc, i) => (
+            <span key={i} className="rounded-md px-2 py-0.5 text-xs" style={{ background: "var(--color-bg-muted)", color: "var(--color-text-subtle)" }}>
+              {desc}
+            </span>
+          ))}
+        </div>
+
+        {/* Expand Button */}
         <button
           onClick={() => setExpanded(!expanded)}
-          className="text-sm text-zinc-400 hover:text-zinc-300"
+          className="mt-3 flex w-full items-center justify-between py-2 text-xs font-medium transition-colors"
+          style={{ color: "var(--color-text-subtle)" }}
         >
-          {expanded ? "Less" : "More"}
+          <span>{expanded ? "Less details" : "View details"}</span>
+          <svg className={`h-4 w-4 transition-transform duration-200 ${expanded ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+          </svg>
         </button>
-      </div>
 
-      <div className="mt-3">
-        <p className="text-sm text-zinc-400">{location.location_description}</p>
-      </div>
-
-      <div className="mt-3 flex flex-wrap gap-1">
-        {location.vibe.descriptors.map((desc, i) => (
-          <span
-            key={i}
-            className="rounded-full bg-zinc-800 px-2 py-0.5 text-xs text-zinc-300"
-          >
-            {desc}
-          </span>
-        ))}
-      </div>
-
-      {expanded && (
-        <div className="mt-4 space-y-3 border-t border-zinc-800 pt-4">
-          <div>
-            <h4 className="text-xs font-medium uppercase tracking-wide text-zinc-500">
-              Vibe
-            </h4>
-            <p className="mt-1 text-sm">
-              {location.vibe.primary}
-              {location.vibe.secondary && ` / ${location.vibe.secondary}`}
-              <span className="ml-2 text-zinc-500">
-                ({Math.round(location.vibe.confidence * 100)}% confidence)
-              </span>
-            </p>
-          </div>
-
-          <div>
-            <h4 className="text-xs font-medium uppercase tracking-wide text-zinc-500">
-              Scouting Notes
-            </h4>
-            <p className="mt-1 text-sm text-zinc-300">
-              {location.scouting_notes}
-            </p>
-          </div>
-
-          {location.constraints.special_requirements.length > 0 && (
+        {/* Expanded */}
+        {expanded && (
+          <div className="animate-fade-in mt-3 space-y-4 border-t pt-4" style={{ borderColor: "var(--color-border-subtle)" }}>
             <div>
-              <h4 className="text-xs font-medium uppercase tracking-wide text-zinc-500">
-                Special Requirements
-              </h4>
-              <ul className="mt-1 list-inside list-disc text-sm text-zinc-300">
-                {location.constraints.special_requirements.map((req, i) => (
-                  <li key={i}>{req}</li>
-                ))}
-              </ul>
+              <h4 className="mb-1.5 text-xs font-medium uppercase tracking-wider" style={{ color: "var(--color-text-subtle)" }}>Scouting Notes</h4>
+              <p className="text-sm leading-relaxed" style={{ color: "var(--color-text-muted)" }}>{location.scouting_notes}</p>
             </div>
-          )}
 
-          <div>
-            <h4 className="text-xs font-medium uppercase tracking-wide text-zinc-500">
-              Script Context
-            </h4>
-            <p className="mt-1 whitespace-pre-wrap font-mono text-xs text-zinc-400">
-              {location.script_context}
-            </p>
-          </div>
+            {location.constraints.special_requirements.length > 0 && (
+              <div>
+                <h4 className="mb-1.5 text-xs font-medium uppercase tracking-wider" style={{ color: "var(--color-text-subtle)" }}>Requirements</h4>
+                <ul className="space-y-1">
+                  {location.constraints.special_requirements.map((req, i) => (
+                    <li key={i} className="flex items-start gap-2 text-sm" style={{ color: "var(--color-text-muted)" }}>
+                      <span style={{ color: "var(--color-accent)" }}>•</span>
+                      {req}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
 
-          <div className="text-xs text-zinc-500">
-            Est. shoot duration: {location.estimated_shoot_duration_hours}h
+            <div>
+              <h4 className="mb-1.5 text-xs font-medium uppercase tracking-wider" style={{ color: "var(--color-text-subtle)" }}>Script Context</h4>
+              <pre className="overflow-x-auto whitespace-pre-wrap rounded-lg p-3 text-xs leading-relaxed" style={{ fontFamily: "var(--font-mono)", background: "var(--color-bg)", color: "var(--color-text-subtle)" }}>
+                {location.script_context}
+              </pre>
+            </div>
+
+            <div className="flex items-center justify-between border-t pt-3 text-xs" style={{ borderColor: "var(--color-border-subtle)", color: "var(--color-text-subtle)" }}>
+              <span>Est. {location.estimated_shoot_duration_hours}h shoot</span>
+              <span className="flex items-center gap-1" style={{ color: "var(--color-success)" }}>
+                {Math.round(location.vibe.confidence * 100)}% confidence
+              </span>
+            </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }
