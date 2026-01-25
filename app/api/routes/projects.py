@@ -44,6 +44,12 @@ class CreateSceneRequest(BaseModel):
     estimated_shoot_hours: int = 12
 
 
+class SaveScenesRequest(BaseModel):
+    """Request to save analyzed scenes to a project."""
+
+    scenes: list[dict]  # List of scene data from analysis
+
+
 # ══════════════════════════════════════════════════════════
 # Endpoints
 # ══════════════════════════════════════════════════════════
@@ -210,3 +216,63 @@ async def create_scene(
     logger.info("Created test scene", scene_id=scene_id, project_id=project_id)
 
     return result.data[0]
+
+
+@router.post("/{project_id}/scenes/batch")
+async def save_analyzed_scenes(
+    project_id: str,
+    request: SaveScenesRequest,
+    auth: AuthenticatedUser = Depends(get_current_user),
+) -> dict[str, Any]:
+    """
+    Save analyzed scenes from script analysis to a project.
+
+    This endpoint receives the full scene data from the frontend after
+    script analysis completes and saves them to the database.
+    """
+    from uuid import uuid4
+
+    repo = ProjectRepository(access_token=auth.access_token)
+    scene_repo = SceneRepository(access_token=auth.access_token)
+
+    # Verify project exists and user can access it
+    project = repo.get(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Delete existing scenes for this project (re-analysis replaces them)
+    existing_scenes = scene_repo.list_by_project(project_id)
+    for scene in existing_scenes:
+        scene_repo._table().delete().eq("id", scene["id"]).execute()
+
+    # Insert new scenes
+    scenes_data = []
+    for scene in request.scenes:
+        scene_id = scene.get("id") or str(uuid4())
+        scenes_data.append({
+            "id": scene_id,
+            "project_id": project_id,
+            "scene_number": scene.get("scene_number", ""),
+            "scene_header": scene.get("scene_header", ""),
+            "page_numbers": scene.get("page_numbers", []),
+            "script_excerpt": scene.get("script_context", scene.get("script_excerpt", "")),
+            "vibe": scene.get("vibe", {}),
+            "constraints": scene.get("constraints", {}),
+            "estimated_shoot_hours": scene.get("estimated_shoot_duration_hours", scene.get("estimated_shoot_hours", 8)),
+            "priority": scene.get("priority", "important"),
+            "status": "pending",
+        })
+
+    if scenes_data:
+        scene_repo._table().insert(scenes_data).execute()
+
+    # Update project status to active
+    repo.update(project_id, status="active")
+
+    logger.info("Saved analyzed scenes", project_id=project_id, count=len(scenes_data))
+
+    return {
+        "success": True,
+        "project_id": project_id,
+        "scenes_saved": len(scenes_data),
+    }

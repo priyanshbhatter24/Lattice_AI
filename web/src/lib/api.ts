@@ -335,6 +335,23 @@ export async function listProjectScenes(projectId: string): Promise<Scene[]> {
   return response.json();
 }
 
+export async function saveProjectScenes(
+  projectId: string,
+  scenes: LocationRequirement[]
+): Promise<{ success: boolean; scenes_saved: number }> {
+  const authHeaders = await getAuthHeaders();
+  const response = await fetch(`${API_BASE}/api/projects/${projectId}/scenes/batch`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders },
+    body: JSON.stringify({ scenes }),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: "Failed to save scenes" }));
+    throw new Error(error.detail);
+  }
+  return response.json();
+}
+
 // ══════════════════════════════════════════════════════════
 // Location Candidates API
 // ══════════════════════════════════════════════════════════

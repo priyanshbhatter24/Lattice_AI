@@ -1,8 +1,9 @@
 "use client";
 
 import { useState, useCallback, useRef, useEffect } from "react";
-import { uploadScript, analyzeScriptWithCallback, getAvailableScripts, type AvailableScript } from "@/lib/api";
-import type { LocationRequirement, AnalysisProgress, SSEEvent } from "@/lib/types";
+import { useSearchParams } from "next/navigation";
+import { uploadScript, analyzeScriptWithCallback, getAvailableScripts, getProject, saveProjectScenes, type AvailableScript } from "@/lib/api";
+import type { LocationRequirement, AnalysisProgress, SSEEvent, Project } from "@/lib/types";
 
 type AppState = "idle" | "uploading" | "analyzing" | "complete";
 type AnalysisPhase = "parsing" | "deduplicating" | "analyzing" | "complete";
@@ -15,6 +16,9 @@ const ANALYSIS_STEPS = [
 ] as const;
 
 export default function Home() {
+  const searchParams = useSearchParams();
+  const projectId = searchParams.get("project");
+
   const [state, setState] = useState<AppState>("idle");
   const [selectedScript, setSelectedScript] = useState<{ name: string; path: string } | null>(null);
   const [availableScripts, setAvailableScripts] = useState<AvailableScript[]>([]);
@@ -27,9 +31,19 @@ export default function Home() {
   const [pageCount, setPageCount] = useState<number | null>(null);
   const [totalLocations, setTotalLocations] = useState<number | null>(null);
   const [dedupeAnimation, setDedupeAnimation] = useState<{ before: number; after: number } | null>(null);
+  const [project, setProject] = useState<Project | null>(null);
+  const [savingScenes, setSavingScenes] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const phaseTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const initialLocationCountRef = useRef<number>(0);
+  const locationsRef = useRef<LocationRequirement[]>([]);
+
+  // Load project if projectId is provided
+  useEffect(() => {
+    if (projectId) {
+      getProject(projectId).then(setProject).catch(console.error);
+    }
+  }, [projectId]);
 
   useEffect(() => {
     getAvailableScripts().then(setAvailableScripts).catch(console.error);
@@ -89,6 +103,7 @@ export default function Home() {
     setStatus("Reading screenplay...");
     setProgress(null);
     setLocations([]);
+    locationsRef.current = [];
     setError(null);
     setPageCount(null);
     setTotalLocations(null);
@@ -143,6 +158,7 @@ export default function Home() {
             break;
           }
           case "location":
+            locationsRef.current = [...locationsRef.current, event.data];
             setLocations((prev) => [...prev, event.data]);
             break;
           case "progress":
@@ -156,6 +172,20 @@ export default function Home() {
             setDedupeAnimation(null);
             setStatus(`Analyzed ${event.data.total_locations} locations in ${event.data.processing_time_seconds}s`);
             setState("complete");
+            // Save scenes to project if projectId is present
+            if (projectId && locationsRef.current.length > 0) {
+              setSavingScenes(true);
+              saveProjectScenes(projectId, locationsRef.current)
+                .then(() => {
+                  console.log("Scenes saved to project");
+                })
+                .catch((err) => {
+                  console.error("Failed to save scenes:", err);
+                })
+                .finally(() => {
+                  setSavingScenes(false);
+                });
+            }
             break;
           case "error":
             if (phaseTimeoutRef.current) {
@@ -212,6 +242,21 @@ export default function Home() {
       >
         <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-6">
           <div className="flex items-center gap-3">
+            {project ? (
+              <>
+                <a
+                  href={`/projects/${projectId}`}
+                  className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-all hover:bg-[var(--color-bg-muted)]"
+                  style={{ color: "var(--color-text-secondary)" }}
+                >
+                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+                  </svg>
+                  {project.name}
+                </a>
+                <div className="h-6 w-px" style={{ background: "var(--color-border)" }} />
+              </>
+            ) : null}
             {/* Film reel inspired icon */}
             <div
               className="flex h-9 w-9 items-center justify-center rounded-full"
@@ -650,7 +695,7 @@ export default function Home() {
 
               {/* CTA to Grounding */}
               <a
-                href="/grounding"
+                href={projectId ? `/grounding?project=${projectId}` : "/grounding"}
                 className="group flex items-center gap-3 rounded-lg px-5 py-3 transition-all hover:scale-[1.02] active:scale-[0.98]"
                 style={{ background: "var(--color-accent)", color: "white" }}
               >
@@ -662,7 +707,7 @@ export default function Home() {
                 </div>
                 <div className="text-left">
                   <span className="block text-sm font-semibold">Find Real Venues</span>
-                  <span className="block text-xs opacity-80">Discover filming locations</span>
+                  <span className="block text-xs opacity-80">{savingScenes ? "Saving scenes..." : "Discover filming locations"}</span>
                 </div>
                 <svg className="h-5 w-5 ml-2 transition-transform group-hover:translate-x-1" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" />

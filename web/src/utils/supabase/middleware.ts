@@ -47,9 +47,10 @@ export const updateSession = async (request: NextRequest) => {
     request.nextUrl.pathname.startsWith("/grounding");
 
   const isRootPage = request.nextUrl.pathname === "/";
+  const hasProjectParam = request.nextUrl.searchParams.has("project");
 
-  // Redirect root page based on auth status
-  if (isRootPage) {
+  // Redirect root page based on auth status (but allow if ?project= param exists)
+  if (isRootPage && !hasProjectParam) {
     const url = request.nextUrl.clone();
     url.pathname = user ? "/projects" : "/login";
     return NextResponse.redirect(url);
