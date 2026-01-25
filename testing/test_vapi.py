@@ -123,28 +123,42 @@ def test_call_context():
 
     try:
         from app.vapi.call_context import CallContext, ProjectContext, build_call_context
+        from app.grounding.models import LocationCandidate
 
-        # Create test context
+        # Create test project context
         project_ctx = ProjectContext(
-            production_company="Test Productions",
+            project_id="test-project-001",
             project_name="Test Film",
+            production_company="Test Productions",
             filming_dates="January 30-31, 2026",
             duration_description="2 full days",
             crew_size=20,
-            scene_description="Interior warehouse scene",
             special_requirements=["parking", "power"],
         )
 
-        call_ctx = CallContext(
-            candidate_id="test-candidate-001",
+        print(f"✓ ProjectContext created: {project_ctx.project_name}")
+
+        # Create a mock LocationCandidate
+        candidate = LocationCandidate(
+            id="test-candidate-001",
+            scene_id="test-scene-001",
+            project_id="test-project-001",
             venue_name="Test Warehouse",
             phone_number="+1-555-123-4567",
-            venue_address="123 Test St, Los Angeles, CA",
-            project_context=project_ctx,
+            formatted_address="123 Test St, Los Angeles, CA",
+            latitude=34.0522,
+            longitude=-118.2437,
         )
 
-        print(f"✓ CallContext created: {call_ctx.venue_name}")
-        print(f"✓ Phone: {call_ctx.phone_number}")
+        # Create call context
+        call_ctx = CallContext(
+            candidate=candidate,
+            project=project_ctx,
+            scene_description="Interior warehouse scene",
+        )
+
+        print(f"✓ CallContext created: {call_ctx.candidate.venue_name}")
+        print(f"✓ Phone: {call_ctx.candidate.phone_number}")
 
         # Test payload generation
         payload = call_ctx.to_vapi_call_payload(
@@ -265,26 +279,38 @@ async def test_trigger_call(phone_number: str):
     try:
         from app.vapi.service import VapiService
         from app.vapi.call_context import CallContext, ProjectContext
+        from app.grounding.models import LocationCandidate
 
         service = VapiService()
 
         # Build test context
         project_ctx = ProjectContext(
-            production_company="Test Productions",
+            project_id="test-live-project",
             project_name="Test Film",
+            production_company="Test Productions",
             filming_dates="Next week",
             duration_description="1 day",
             crew_size=10,
-            scene_description="Test scene",
             special_requirements=[],
         )
 
-        call_ctx = CallContext(
-            candidate_id="test-live-call",
+        # Create a mock LocationCandidate with valid UUIDs
+        from uuid import uuid4
+        candidate = LocationCandidate(
+            id=str(uuid4()),
+            scene_id=str(uuid4()),
+            project_id=str(uuid4()),
             venue_name="Test Call",
             phone_number=phone_number,
-            venue_address="123 Test St",
-            project_context=project_ctx,
+            formatted_address="123 Test St",
+            latitude=34.0522,
+            longitude=-118.2437,
+        )
+
+        call_ctx = CallContext(
+            candidate=candidate,
+            project=project_ctx,
+            scene_description="Test scene",
         )
 
         print("Triggering call...")
