@@ -204,6 +204,7 @@ Find real-world locations that match the following requirements:
 For each location found, provide:
 - Venue name
 - Full address
+- Google Place ID (important for fetching photos)
 - Phone number (if available)
 - Website (if available)
 - Why it matches the requirements (brief explanation)
@@ -216,6 +217,7 @@ Format your response as a JSON array of locations with the following structure:
   {{
     "venue_name": "Example Venue",
     "formatted_address": "123 Main St, Los Angeles, CA 90001",
+    "place_id": "ChIJ...",
     "phone_number": "+1-555-123-4567",
     "website_url": "https://example.com",
     "latitude": 34.0522,
@@ -327,6 +329,146 @@ Return ONLY the JSON array, no other text."""
 
         return min(score, 1.0)
 
+    async def _fetch_photos_for_candidates(self, candidates: list[LocationCandidate]) -> None:
+        """
+        Fetch photos from Google Places API for all candidates.
+
+        Uses the place_id to get photo references, then constructs photo URLs.
+        Falls back to Street View if no Place photos available.
+        """
+        if not self.config.google_maps_api_key:
+            logger.warning("GOOGLE_MAPS_API_KEY not configured - photos will not be fetched")
+            return
+
+        api_key = self.config.google_maps_api_key
+        logger.info("Fetching photos for candidates", count=len(candidates), api_key_prefix=api_key[:10] + "...")
+
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            for candidate in candidates:
+                try:
+                    photo_urls = await self._fetch_place_photos(client, candidate, api_key)
+                    if photo_urls:
+                        candidate.photo_urls = photo_urls
+                        logger.info("Got photos", venue=candidate.venue_name, count=len(photo_urls), first_url=photo_urls[0][:60] + "...")
+                    else:
+                        logger.warning("No photos found", venue=candidate.venue_name)
+                except Exception as e:
+                    logger.error("Failed to fetch photos", venue=candidate.venue_name, error=str(e))
+
+    async def _fetch_place_photos(
+        self,
+        client: httpx.AsyncClient,
+        candidate: LocationCandidate,
+        api_key: str
+    ) -> list[str]:
+        """
+        Fetch photo URLs for a single candidate from Google Places API.
+        """
+        urls = []
+        place_id = candidate.google_place_id
+        logger.info("Fetching photos for venue", venue=candidate.venue_name, has_place_id=bool(place_id))
+
+        # If no place_id, search for it using venue name and address
+        if not place_id:
+            logger.info("No place_id, searching via Find Place API", venue=candidate.venue_name)
+            place_id = await self._find_place_id(client, candidate, api_key)
+
+        # Try to get photos via Place Details API if we have a place_id
+        if place_id:
+            details_url = (
+                f"https://maps.googleapis.com/maps/api/place/details/json"
+                f"?place_id={place_id}"
+                f"&fields=photos"
+                f"&key={api_key}"
+            )
+
+            try:
+                response = await client.get(details_url)
+                logger.info("Place Details API response", venue=candidate.venue_name, status=response.status_code)
+
+                if response.status_code == 200:
+                    data = response.json()
+                    status = data.get("status")
+                    photos = data.get("result", {}).get("photos", [])
+                    logger.info("Place Details result", venue=candidate.venue_name, api_status=status, photo_count=len(photos))
+
+                    # Get up to 3 photos
+                    for photo in photos[:3]:
+                        photo_ref = photo.get("photo_reference")
+                        if photo_ref:
+                            # Construct the photo URL
+                            photo_url = (
+                                f"https://maps.googleapis.com/maps/api/place/photo"
+                                f"?maxwidth=600"
+                                f"&photo_reference={photo_ref}"
+                                f"&key={api_key}"
+                            )
+                            urls.append(photo_url)
+
+                            # Store attribution if available
+                            attributions = photo.get("html_attributions", [])
+                            if attributions:
+                                candidate.photo_attributions.extend(attributions)
+
+                    if urls:
+                        return urls
+                else:
+                    logger.warning("Place Details API error", venue=candidate.venue_name, status=response.status_code, body=response.text[:200])
+            except Exception as e:
+                logger.error("Place Details API failed", venue=candidate.venue_name, error=str(e))
+
+        # Fallback to Street View if no Place photos
+        if candidate.latitude and candidate.longitude:
+            streetview_url = (
+                f"https://maps.googleapis.com/maps/api/streetview"
+                f"?size=600x400"
+                f"&location={candidate.latitude},{candidate.longitude}"
+                f"&fov=90&pitch=0"
+                f"&key={api_key}"
+            )
+            urls.append(streetview_url)
+            logger.debug("Using Street View fallback", venue=candidate.venue_name)
+
+        return urls
+
+    async def _find_place_id(
+        self,
+        client: httpx.AsyncClient,
+        candidate: LocationCandidate,
+        api_key: str
+    ) -> str | None:
+        """
+        Search for a place_id using venue name and address.
+        """
+        import urllib.parse
+
+        # Build search query from venue name and address
+        search_query = f"{candidate.venue_name} {candidate.formatted_address}"
+        encoded_query = urllib.parse.quote(search_query)
+
+        find_place_url = (
+            f"https://maps.googleapis.com/maps/api/place/findplacefromtext/json"
+            f"?input={encoded_query}"
+            f"&inputtype=textquery"
+            f"&fields=place_id"
+            f"&key={api_key}"
+        )
+
+        try:
+            response = await client.get(find_place_url)
+            if response.status_code == 200:
+                data = response.json()
+                candidates = data.get("candidates", [])
+                if candidates:
+                    place_id = candidates[0].get("place_id")
+                    if place_id:
+                        logger.debug("Found place_id via search", venue=candidate.venue_name, place_id=place_id[:20])
+                        return place_id
+        except Exception as e:
+            logger.debug("Find Place API failed", venue=candidate.venue_name, error=str(e))
+
+        return None
+
     async def find_locations(self, requirement: LocationRequirement) -> GroundingResult:
         """
         Find real-world locations matching the requirement.
@@ -390,6 +532,16 @@ Return ONLY the JSON array, no other text."""
 
             # Limit to max results
             candidates = candidates[:requirement.max_results]
+
+            # Fetch photos for all candidates
+            if candidates:
+                logger.info("=" * 50)
+                logger.info("PHOTO FETCH: Starting for candidates", count=len(candidates))
+                await self._fetch_photos_for_candidates(candidates)
+                logger.info("PHOTO FETCH: Complete")
+                for c in candidates:
+                    logger.info("Candidate photos", venue=c.venue_name, photo_count=len(c.photo_urls), has_photos=bool(c.photo_urls))
+                logger.info("=" * 50)
 
             # Count filtered
             no_phone_count = sum(1 for c in candidates if c.vapi_call_status == VapiCallStatus.NO_PHONE_NUMBER)

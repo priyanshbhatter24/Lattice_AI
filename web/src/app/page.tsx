@@ -135,6 +135,16 @@ export default function Home() {
 
       setSavedSceneIds(result.scene_ids);
 
+      // Create a mapping from NEW database scene IDs back to ORIGINAL analysis scene IDs
+      // This is needed because grounding uses DB IDs but our locations array has original IDs
+      const dbIdToOriginalId = new Map<string, string>();
+      selectedLocations.forEach((loc, index) => {
+        if (result.scene_ids[index]) {
+          dbIdToOriginalId.set(result.scene_ids[index], loc.scene_id);
+          console.log(`[FindVenues] ID mapping: ${result.scene_ids[index]} -> ${loc.scene_id}`);
+        }
+      });
+
       // Start grounding - 1 venue per scene, processed in parallel
       console.log("[FindVenues] Starting grounding for scene_ids:", result.scene_ids);
       groundScenesWithCallback(
@@ -149,10 +159,11 @@ export default function Home() {
               setCurrentGroundingScene(event.data.scene_header);
               break;
             case "candidate":
-              // Store venue by scene_id for flip card animation
+              // Map the DB scene_id back to the original analysis scene_id
+              const originalSceneId = dbIdToOriginalId.get(event.data.scene_id) || event.data.scene_id;
               setVenuesByScene(prev => {
                 const next = new Map(prev);
-                next.set(event.data.scene_id, event.data.candidate);
+                next.set(originalSceneId, event.data.candidate);
                 return next;
               });
               break;
@@ -884,6 +895,10 @@ export default function Home() {
               locations={locations}
               selectedIds={selectedLocationIds}
               onSelect={handleSelectLocation}
+              onModify={(location) => {
+                console.log("[Modify] TODO: Open modify dialog for scene:", location.scene_header);
+                // TODO: Open a modal to modify the location requirements
+              }}
             />
           </div>
         )}
@@ -1073,12 +1088,12 @@ function DedupeAnimation({ before, after }: { before: number; after: number }) {
       </div>
 
       {/* Merge Animation Area */}
-      <div className="relative flex items-center justify-center gap-4 py-6">
+      <div className="relative flex items-center justify-center gap-6 py-12 mt-4">
         {/* Left Card */}
         <div
-          className="w-56 transition-all duration-300 ease-[cubic-bezier(0.4,0,0.2,1)]"
+          className="w-72 transition-all duration-300 ease-[cubic-bezier(0.4,0,0.2,1)]"
           style={{
-            transform: mergePhase === 'merging' ? 'translateX(50px) scale(0.92)' : mergePhase === 'merged' ? 'translateX(100px) scale(0)' : 'translateX(0) scale(1)',
+            transform: mergePhase === 'merging' ? 'translateX(60px) scale(0.92)' : mergePhase === 'merged' ? 'translateX(120px) scale(0)' : 'translateX(0) scale(1)',
             opacity: mergePhase === 'merged' ? 0 : 1,
           }}
         >
@@ -1088,19 +1103,19 @@ function DedupeAnimation({ before, after }: { before: number; after: number }) {
         {/* Center - Merge indicator or merged result */}
         <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-10">
           {mergePhase === 'merged' ? (
-            <div className="w-64 animate-fade-in">
+            <div className="w-80 animate-fade-in">
               <MergeCard location={currentPair.merged} status="result" />
             </div>
           ) : (
             <div
-              className="flex h-10 w-10 items-center justify-center rounded-full transition-all duration-200 ease-out"
+              className="flex h-14 w-14 items-center justify-center rounded-full transition-all duration-200 ease-out"
               style={{
                 background: mergePhase === 'merging' ? 'var(--color-accent)' : 'var(--color-bg-muted)',
                 color: mergePhase === 'merging' ? 'white' : 'var(--color-text-muted)',
                 transform: mergePhase === 'merging' ? 'scale(1.15)' : 'scale(1)',
               }}
             >
-              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
               </svg>
             </div>
@@ -1109,9 +1124,9 @@ function DedupeAnimation({ before, after }: { before: number; after: number }) {
 
         {/* Right Card */}
         <div
-          className="w-56 transition-all duration-300 ease-[cubic-bezier(0.4,0,0.2,1)]"
+          className="w-72 transition-all duration-300 ease-[cubic-bezier(0.4,0,0.2,1)]"
           style={{
-            transform: mergePhase === 'merging' ? 'translateX(-50px) scale(0.92)' : mergePhase === 'merged' ? 'translateX(-100px) scale(0)' : 'translateX(0) scale(1)',
+            transform: mergePhase === 'merging' ? 'translateX(-60px) scale(0.92)' : mergePhase === 'merged' ? 'translateX(-120px) scale(0)' : 'translateX(0) scale(1)',
             opacity: mergePhase === 'merged' ? 0 : 1,
           }}
         >
@@ -1315,10 +1330,12 @@ function SelectableLocationGrid({
   locations,
   selectedIds,
   onSelect,
+  onModify,
 }: {
   locations: LocationRequirement[];
   selectedIds: Set<string>;
   onSelect: (sceneId: string, selected: boolean) => void;
+  onModify: (location: LocationRequirement) => void;
 }) {
   const [modalLocation, setModalLocation] = useState<LocationRequirement | null>(null);
 
@@ -1332,6 +1349,7 @@ function SelectableLocationGrid({
             isSelected={selectedIds.has(loc.scene_id)}
             onSelect={(selected) => onSelect(loc.scene_id, selected)}
             onViewDetails={() => setModalLocation(loc)}
+            onModify={() => onModify(loc)}
           />
         ))}
       </div>
@@ -1355,11 +1373,13 @@ function SelectableLocationCard({
   isSelected,
   onSelect,
   onViewDetails,
+  onModify,
 }: {
   location: LocationRequirement;
   isSelected: boolean;
   onSelect: (selected: boolean) => void;
   onViewDetails: () => void;
+  onModify: () => void;
 }) {
   const isInterior = location.constraints.interior_exterior === "interior";
   const isDay = location.constraints.time_of_day === "day";
@@ -1430,16 +1450,32 @@ function SelectableLocationCard({
         <p className="mt-2 line-clamp-2 text-xs leading-relaxed flex-1" style={{ color: "var(--color-text-muted)" }}>
           {location.location_description || "No description"}
         </p>
-        <div className="mt-3 flex items-center gap-1.5 overflow-hidden">
-          <span className="tag tag-primary truncate max-w-[80px]">{location.vibe.primary}</span>
-          {location.vibe.descriptors.slice(0, 2).map((desc, i) => (
-            <span key={i} className="tag tag-muted truncate max-w-[70px]">{desc}</span>
-          ))}
-          {extraTags > 0 && (
-            <span className="text-[10px] flex-shrink-0" style={{ color: "var(--color-text-subtle)" }}>
-              +{extraTags}
-            </span>
-          )}
+        <div className="mt-2 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5 overflow-hidden flex-1">
+            <span className="tag tag-primary truncate max-w-[80px]">{location.vibe.primary}</span>
+            {location.vibe.descriptors.slice(0, 1).map((desc, i) => (
+              <span key={i} className="tag tag-muted truncate max-w-[60px]">{desc}</span>
+            ))}
+            {extraTags > 1 && (
+              <span className="text-[10px] flex-shrink-0" style={{ color: "var(--color-text-subtle)" }}>
+                +{extraTags}
+              </span>
+            )}
+          </div>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onModify();
+            }}
+            className="px-2 py-1 rounded text-[10px] font-medium transition-colors flex-shrink-0"
+            style={{
+              background: "var(--color-bg-muted)",
+              color: "var(--color-text-muted)",
+              border: "1px solid var(--color-border-subtle)",
+            }}
+          >
+            Modify
+          </button>
         </div>
       </div>
     </div>
@@ -1668,7 +1704,7 @@ function SceneVenueFlipGrid({
   );
 }
 
-// Flip card that shows scene on front, venue on back
+// Card that shows scene info while searching, transitions to venue info when found
 function SceneVenueFlipCard({
   location,
   venue,
@@ -1678,156 +1714,204 @@ function SceneVenueFlipCard({
   venue: LocationCandidate | null;
   onClick: () => void;
 }) {
-  const isFlipped = venue !== null;
-  const [imageError, setImageError] = useState(false);
-  const hasPhoto = venue && venue.photo_urls && venue.photo_urls.length > 0 && !imageError;
+  const [showVenue, setShowVenue] = useState(false);
+
+  // Trigger transition animation when venue is discovered
+  useEffect(() => {
+    if (venue && !showVenue) {
+      const timer = setTimeout(() => setShowVenue(true), 50);
+      return () => clearTimeout(timer);
+    }
+  }, [venue, showVenue]);
 
   return (
     <div
-      className="flip-card cursor-pointer"
-      style={{ height: "220px", perspective: "1000px" }}
+      className="paper-card rounded-lg overflow-hidden cursor-pointer"
+      style={{
+        height: "220px",
+        borderColor: showVenue ? "var(--color-success)" : undefined,
+        transition: "border-color 0.3s ease",
+        position: "relative",
+      }}
       onClick={onClick}
     >
-      <div
-        className={`flip-card-inner ${isFlipped ? "flipped" : ""}`}
-        style={{
-          position: "relative",
-          width: "100%",
-          height: "100%",
-          transition: "transform 0.6s",
-          transformStyle: "preserve-3d",
-          transform: isFlipped ? "rotateY(180deg)" : "rotateY(0deg)",
-        }}
-      >
-        {/* Front - Scene Info */}
-        <div
-          className="flip-card-front paper-card rounded-lg overflow-hidden"
-          style={{
-            position: "absolute",
-            width: "100%",
-            height: "100%",
-            backfaceVisibility: "hidden",
-            WebkitBackfaceVisibility: "hidden",
-          }}
-        >
-          <div className="h-full flex flex-col p-4">
-            {/* Scene header badge */}
-            <div className="flex items-center gap-2 mb-2">
-              <span
-                className="text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded"
-                style={{
-                  background: location.constraints.interior_exterior === "interior" ? "rgba(107, 142, 122, 0.15)" : "rgba(154, 123, 91, 0.15)",
-                  color: location.constraints.interior_exterior === "interior" ? "var(--color-interior)" : "var(--color-exterior)",
-                }}
-              >
-                {location.constraints.interior_exterior}
-              </span>
-              <span
-                className="text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded"
-                style={{
-                  background: location.constraints.time_of_day === "day" ? "rgba(196, 149, 10, 0.15)" : "rgba(91, 107, 170, 0.15)",
-                  color: location.constraints.time_of_day === "day" ? "var(--color-day)" : "var(--color-night)",
-                }}
-              >
-                {location.constraints.time_of_day}
-              </span>
+      {/* Searching state - hidden when venue found */}
+      {!showVenue && (
+        <div className="h-full flex flex-col p-4">
+          {/* Scene header badges */}
+          <div className="flex items-center gap-2 mb-2">
+            <span
+              className="text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded"
+              style={{
+                background: location.constraints.interior_exterior === "interior" ? "rgba(107, 142, 122, 0.15)" : "rgba(154, 123, 91, 0.15)",
+                color: location.constraints.interior_exterior === "interior" ? "var(--color-interior)" : "var(--color-exterior)",
+              }}
+            >
+              {location.constraints.interior_exterior}
+            </span>
+            <span
+              className="text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded"
+              style={{
+                background: location.constraints.time_of_day === "day" ? "rgba(196, 149, 10, 0.15)" : "rgba(91, 107, 170, 0.15)",
+                color: location.constraints.time_of_day === "day" ? "var(--color-day)" : "var(--color-night)",
+              }}
+            >
+              {location.constraints.time_of_day}
+            </span>
+          </div>
+
+          {/* Scene header */}
+          <h3 className="scene-header text-sm leading-tight mb-2" style={{ color: "var(--color-text)" }}>
+            {location.scene_header}
+          </h3>
+
+          {/* Description with ellipsis */}
+          <p
+            className="text-xs leading-relaxed flex-1 overflow-hidden"
+            style={{
+              color: "var(--color-text-muted)",
+              display: "-webkit-box",
+              WebkitLineClamp: 3,
+              WebkitBoxOrient: "vertical",
+            }}
+          >
+            {location.location_description || "Analyzing scene requirements..."}
+          </p>
+
+          {/* Searching indicator */}
+          <div className="mt-auto pt-3 flex items-center gap-2" style={{ borderTop: "1px solid var(--color-border-subtle)" }}>
+            <div className="flex gap-1">
+              <div className="h-1.5 w-1.5 rounded-full animate-bounce" style={{ background: "var(--color-accent)" }} />
+              <div className="h-1.5 w-1.5 rounded-full animate-bounce" style={{ background: "var(--color-accent)", animationDelay: "150ms" }} />
+              <div className="h-1.5 w-1.5 rounded-full animate-bounce" style={{ background: "var(--color-accent)", animationDelay: "300ms" }} />
             </div>
+            <span className="text-[10px]" style={{ color: "var(--color-text-subtle)" }}>Searching...</span>
+          </div>
+        </div>
+      )}
 
-            {/* Scene header */}
-            <h3 className="scene-header text-sm leading-tight mb-2" style={{ color: "var(--color-text)" }}>
-              {location.scene_header}
+      {/* Venue found state */}
+      {showVenue && venue && (
+        <div className="h-full flex flex-col animate-fade-in">
+          {/* Venue photo or gradient fallback */}
+          <div
+            className="relative h-24 flex-shrink-0"
+            style={{
+              background: `linear-gradient(135deg, hsl(${Math.abs(venue.venue_name.charCodeAt(0) * 7) % 360}, 25%, 25%) 0%, hsl(${Math.abs(venue.venue_name.charCodeAt(0) * 7 + 40) % 360}, 30%, 18%) 100%)`,
+            }}
+          >
+            {venue.photo_urls && venue.photo_urls.length > 0 ? (
+              <img
+                src={venue.photo_urls[0]}
+                alt={venue.venue_name}
+                className="w-full h-full object-cover"
+                onError={(e) => {
+                  // Hide image on error, gradient shows through
+                  (e.target as HTMLImageElement).style.display = 'none';
+                }}
+              />
+            ) : (
+              <div className="w-full h-full flex items-center justify-center">
+                <div className="flex items-center gap-2">
+                  <svg className="h-5 w-5 text-white/60" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z" />
+                  </svg>
+                  <span className="text-white/80 text-xs font-medium tracking-wide uppercase">
+                    {venue.venue_name.split(" ").slice(0, 2).map(w => w[0]).join("")}
+                  </span>
+                </div>
+              </div>
+            )}
+            {/* Match score badge */}
+            <div
+              className="absolute top-2 right-2 flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold"
+              style={{ background: venue.match_score >= 0.7 ? "var(--color-success)" : "var(--color-warning)", color: "white" }}
+            >
+              {Math.round(venue.match_score * 100)}%
+            </div>
+            {/* Scene reference badge */}
+            <div
+              className="absolute top-2 left-2 px-2 py-0.5 rounded text-[9px] font-medium"
+              style={{ background: "rgba(0,0,0,0.6)", color: "white" }}
+            >
+              {location.scene_header.split(" ").slice(0, 3).join(" ")}
+            </div>
+          </div>
+
+          {/* Venue content */}
+          <div className="p-3 flex-1 flex flex-col min-h-0">
+            <h3
+              className="text-sm font-semibold leading-tight truncate"
+              style={{ fontFamily: "var(--font-display)", color: "var(--color-text)" }}
+              title={venue.venue_name}
+            >
+              {venue.venue_name}
             </h3>
-
-            {/* Description */}
-            <p className="text-xs leading-relaxed flex-1" style={{ color: "var(--color-text-muted)" }}>
-              {location.location_description || "Searching for matching venue..."}
+            <p
+              className="mt-1 text-[11px] overflow-hidden"
+              style={{
+                color: "var(--color-text-muted)",
+                display: "-webkit-box",
+                WebkitLineClamp: 2,
+                WebkitBoxOrient: "vertical",
+              }}
+              title={venue.match_reasoning || venue.formatted_address}
+            >
+              {venue.match_reasoning || venue.formatted_address}
             </p>
 
-            {/* Searching indicator */}
-            <div className="mt-auto pt-3 flex items-center gap-2" style={{ borderTop: "1px solid var(--color-border-subtle)" }}>
-              <div className="flex gap-1">
-                <div className="h-1.5 w-1.5 rounded-full animate-bounce" style={{ background: "var(--color-accent)" }} />
-                <div className="h-1.5 w-1.5 rounded-full animate-bounce" style={{ background: "var(--color-accent)", animationDelay: "150ms" }} />
-                <div className="h-1.5 w-1.5 rounded-full animate-bounce" style={{ background: "var(--color-accent)", animationDelay: "300ms" }} />
+            {/* Footer with phone, rating and Generate Alternatives */}
+            <div className="mt-auto pt-2 flex flex-col gap-2" style={{ borderTop: "1px solid var(--color-border-subtle)" }}>
+              <div className="flex items-center justify-between text-[10px]">
+                {venue.phone_number ? (
+                  <span className="flex items-center gap-1 truncate" style={{ color: "var(--color-success)", maxWidth: "55%" }}>
+                    <svg className="h-3 w-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 6.75c0 8.284 6.716 15 15 15h2.25a2.25 2.25 0 002.25-2.25v-1.372c0-.516-.351-.966-.852-1.091l-4.423-1.106c-.44-.11-.902.055-1.173.417l-.97 1.293c-.282.376-.769.542-1.21.38a12.035 12.035 0 01-7.143-7.143c-.162-.441.004-.928.38-1.21l1.293-.97c.363-.271.527-.734.417-1.173L6.963 3.102a1.125 1.125 0 00-1.091-.852H4.5A2.25 2.25 0 002.25 4.5v2.25z" />
+                    </svg>
+                    <span className="truncate">{venue.phone_number}</span>
+                  </span>
+                ) : (
+                  <span style={{ color: "var(--color-text-subtle)" }}>No phone</span>
+                )}
+                {venue.google_rating && (
+                  <span className="flex items-center gap-1 text-[10px]" style={{ color: "var(--color-text-secondary)" }}>
+                    <svg className="h-3 w-3" fill="var(--color-warning)" viewBox="0 0 24 24">
+                      <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+                    </svg>
+                    {venue.google_rating.toFixed(1)}
+                  </span>
+                )}
               </div>
-              <span className="text-[10px]" style={{ color: "var(--color-text-subtle)" }}>Searching...</span>
+              {/* Generate Alternatives button */}
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  console.log("[GenerateAlternatives] TODO: Generate alternatives for", venue.venue_name);
+                }}
+                className="w-full py-1 px-2 rounded text-[10px] font-medium transition-colors"
+                style={{
+                  background: "var(--color-bg-muted)",
+                  color: "var(--color-text-muted)",
+                  border: "1px solid var(--color-border-subtle)",
+                }}
+                onMouseOver={(e) => {
+                  e.currentTarget.style.background = "var(--color-accent-light)";
+                  e.currentTarget.style.color = "var(--color-accent)";
+                  e.currentTarget.style.borderColor = "var(--color-accent)";
+                }}
+                onMouseOut={(e) => {
+                  e.currentTarget.style.background = "var(--color-bg-muted)";
+                  e.currentTarget.style.color = "var(--color-text-muted)";
+                  e.currentTarget.style.borderColor = "var(--color-border-subtle)";
+                }}
+              >
+                Generate Alternatives
+              </button>
             </div>
           </div>
         </div>
-
-        {/* Back - Venue Info */}
-        <div
-          className="flip-card-back paper-card rounded-lg overflow-hidden"
-          style={{
-            position: "absolute",
-            width: "100%",
-            height: "100%",
-            backfaceVisibility: "hidden",
-            WebkitBackfaceVisibility: "hidden",
-            transform: "rotateY(180deg)",
-            borderColor: "var(--color-success)",
-          }}
-        >
-          {venue && (
-            <div className="h-full flex flex-col">
-              {/* Venue photo or placeholder */}
-              <div className="relative h-24 flex-shrink-0" style={{ background: "var(--color-bg-muted)" }}>
-                {hasPhoto ? (
-                  <img
-                    src={venue.photo_urls[0]}
-                    alt={venue.venue_name}
-                    onError={() => setImageError(true)}
-                    className="w-full h-full object-cover"
-                  />
-                ) : (
-                  <div className="w-full h-full flex items-center justify-center">
-                    <svg className="h-8 w-8" style={{ color: "var(--color-text-subtle)" }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v12a1.5 1.5 0 001.5 1.5zm10.5-11.25h.008v.008h-.008V8.25zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z" />
-                    </svg>
-                  </div>
-                )}
-                {/* Match score badge */}
-                <div
-                  className="absolute top-2 right-2 flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold"
-                  style={{ background: venue.match_score >= 0.7 ? "var(--color-success)" : "var(--color-warning)", color: "white" }}
-                >
-                  {Math.round(venue.match_score * 100)}%
-                </div>
-              </div>
-
-              {/* Venue content */}
-              <div className="p-3 flex-1 flex flex-col">
-                <h3 className="text-sm font-semibold leading-tight" style={{ fontFamily: "var(--font-display)", color: "var(--color-text)" }}>
-                  {venue.venue_name}
-                </h3>
-                <p className="mt-1 text-[11px]" style={{ color: "var(--color-text-muted)" }}>
-                  {venue.formatted_address}
-                </p>
-
-                {/* Quick info */}
-                <div className="mt-auto pt-2 flex items-center gap-3 text-[10px]">
-                  {venue.google_rating && (
-                    <span className="flex items-center gap-1" style={{ color: "var(--color-text-secondary)" }}>
-                      <svg className="h-3 w-3" fill="var(--color-warning)" viewBox="0 0 24 24">
-                        <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
-                      </svg>
-                      {venue.google_rating.toFixed(1)}
-                    </span>
-                  )}
-                  {venue.phone_number && (
-                    <span className="flex items-center gap-1" style={{ color: "var(--color-success)" }}>
-                      <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                        <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z" />
-                      </svg>
-                      Phone
-                    </span>
-                  )}
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
+      )}
     </div>
   );
 }

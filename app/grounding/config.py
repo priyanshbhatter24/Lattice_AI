@@ -22,6 +22,10 @@ class GroundingConfig(BaseSettings):
     google_cloud_location: str = "global"
     google_application_credentials: str = ""  # Optional: path to service account JSON
 
+    # Google Maps API key (for static map images and photos)
+    # Enable "Maps Static API" and "Places API" in GCP Console
+    google_maps_api_key: str = ""
+
     # Gemini model settings (for grounding)
     model_name: str = "gemini-2.5-flash"
     api_version: str = "v1"
