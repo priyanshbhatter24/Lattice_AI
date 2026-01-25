@@ -1,0 +1,1 @@
+# Location Scout AI
