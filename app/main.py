@@ -1,5 +1,7 @@
 from dotenv import load_dotenv
-load_dotenv()
+# Load .env first, then .env.local (local overrides base)
+load_dotenv(".env")
+load_dotenv(".env.local", override=True)
 
 import structlog
 from fastapi import FastAPI

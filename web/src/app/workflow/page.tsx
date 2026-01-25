@@ -49,6 +49,9 @@ export default function Home() {
   const [groundingProgress, setGroundingProgress] = useState({ processed: 0, total: 0, percent: 0 });
   const [currentGroundingScene, setCurrentGroundingScene] = useState("");
   const [venuesByScene, setVenuesByScene] = useState<Map<string, LocationCandidate>>(new Map());
+  const [allVenues, setAllVenues] = useState<LocationCandidate[]>([]); // All discovered venues
+  const [latestVenueId, setLatestVenueId] = useState<string | null>(null); // Most recent venue ID
+  const [consideringVenue, setConsideringVenue] = useState<LocationCandidate | null>(null); // Currently evaluating
   const [savedProjectId, setSavedProjectId] = useState<string | null>(null);
   const [savedSceneIds, setSavedSceneIds] = useState<string[]>([]);
 
@@ -101,6 +104,9 @@ export default function Home() {
     setError(null);
     setState("grounding");
     setVenuesByScene(new Map());
+    setAllVenues([]);
+    setLatestVenueId(null);
+    setConsideringVenue(null);
     setGroundingProgress({ processed: 0, total: selectedLocations.length, percent: 0 });
 
     try {
@@ -145,12 +151,12 @@ export default function Home() {
         }
       });
 
-      // Start grounding - 1 venue per scene, processed in parallel
+      // Start grounding - 5 venues per scene, processed in parallel
       console.log("[FindVenues] Starting grounding for scene_ids:", result.scene_ids);
       groundScenesWithCallback(
         result.scene_ids,
         "Los Angeles, CA",
-        1,  // Just 1 venue per scene
+        5,  // 5 venues per scene for better options
         true,
         (event: GroundingSSEEvent) => {
           console.log("[FindVenues] Grounding event:", event.type, event.data);
@@ -159,13 +165,35 @@ export default function Home() {
               setCurrentGroundingScene(event.data.scene_header);
               break;
             case "candidate":
+              // Log photo info for debugging
+              const candidate = event.data.candidate;
+              console.log("[FindVenues] Candidate received:", {
+                venue: candidate.venue_name,
+                photo_urls: candidate.photo_urls,
+                photo_count: candidate.photo_urls?.length || 0,
+                match_score: candidate.match_score,
+              });
+
               // Map the DB scene_id back to the original analysis scene_id
               const originalSceneId = dbIdToOriginalId.get(event.data.scene_id) || event.data.scene_id;
-              setVenuesByScene(prev => {
-                const next = new Map(prev);
-                next.set(originalSceneId, event.data.candidate);
-                return next;
-              });
+
+              // Show venue in "considering" state briefly
+              setConsideringVenue(candidate);
+
+              // After a brief delay, move to accepted (simulates evaluation)
+              setTimeout(() => {
+                // Update venuesByScene (keeps last venue per scene for backwards compat)
+                setVenuesByScene(prev => {
+                  const next = new Map(prev);
+                  next.set(originalSceneId, candidate);
+                  return next;
+                });
+
+                // Prepend to allVenues list (new items at top, push others down)
+                setAllVenues(prev => [candidate, ...prev]);
+                setLatestVenueId(candidate.id);
+                setConsideringVenue(null);
+              }, 800); // Show "considering" for 800ms
               break;
             case "progress":
               setGroundingProgress({
@@ -929,9 +957,15 @@ export default function Home() {
                       <p className="text-sm opacity-80">{currentGroundingScene || "Initializing search..."}</p>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2 px-3 py-1.5 rounded-full" style={{ background: "rgba(255,255,255,0.2)" }}>
-                    <div className="h-2 w-2 rounded-full animate-ping" style={{ background: "white" }} />
-                    <span className="text-sm font-medium">{Math.round(groundingProgress.percent)}%</span>
+                  <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-2">
+                      <span className="text-2xl font-bold">{allVenues.length}</span>
+                      <span className="text-sm opacity-80">found</span>
+                    </div>
+                    <div className="flex items-center gap-2 px-3 py-1.5 rounded-full" style={{ background: "rgba(255,255,255,0.2)" }}>
+                      <div className="h-2 w-2 rounded-full animate-ping" style={{ background: "white" }} />
+                      <span className="text-sm font-medium">{Math.round(groundingProgress.percent)}%</span>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -940,22 +974,95 @@ export default function Home() {
               <div className="p-4">
                 <div className="flex justify-between text-xs mb-2" style={{ color: "var(--color-text-muted)" }}>
                   <span>Scene {groundingProgress.processed} of {groundingProgress.total}</span>
-                  <span>{venuesByScene.size} venues found</span>
+                  <span>Searching for up to 5 venues per scene</span>
                 </div>
                 <div className="h-2 rounded-full overflow-hidden" style={{ background: "var(--color-bg-muted)" }}>
                   <div
-                    className="h-full rounded-full transition-all duration-300"
+                    className="h-full rounded-full transition-all duration-300 animate-pulse-subtle"
                     style={{ width: `${groundingProgress.percent}%`, background: "var(--color-accent)" }}
                   />
                 </div>
               </div>
             </div>
 
-            {/* Flip cards grid - scene cards that flip to show venue when found */}
-            <SceneVenueFlipGrid
-              locations={locations.filter(l => selectedLocationIds.has(l.scene_id))}
-              venuesByScene={venuesByScene}
-            />
+            {/* Currently Evaluating Panel */}
+            {consideringVenue && (
+              <div
+                className="paper-card mb-4 p-4 animate-fade-in"
+                style={{ borderColor: "var(--color-warning)", borderWidth: "2px" }}
+              >
+                <div className="flex items-center gap-4">
+                  {/* Spinner */}
+                  <div
+                    className="h-12 w-12 rounded-lg flex items-center justify-center flex-shrink-0"
+                    style={{ background: "var(--color-warning)", opacity: 0.15 }}
+                  >
+                    <div
+                      className="h-6 w-6 rounded-full border-2 animate-spin"
+                      style={{ borderColor: "var(--color-warning)", borderTopColor: "transparent" }}
+                    />
+                  </div>
+
+                  {/* Venue info */}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--color-warning)" }}>
+                        Evaluating
+                      </span>
+                      <div className="flex gap-0.5">
+                        <div className="h-1 w-1 rounded-full animate-bounce" style={{ background: "var(--color-warning)" }} />
+                        <div className="h-1 w-1 rounded-full animate-bounce" style={{ background: "var(--color-warning)", animationDelay: "150ms" }} />
+                        <div className="h-1 w-1 rounded-full animate-bounce" style={{ background: "var(--color-warning)", animationDelay: "300ms" }} />
+                      </div>
+                    </div>
+                    <h4 className="font-semibold truncate" style={{ color: "var(--color-text)" }}>
+                      {consideringVenue.venue_name}
+                    </h4>
+                    <p className="text-xs truncate" style={{ color: "var(--color-text-muted)" }}>
+                      {consideringVenue.formatted_address}
+                    </p>
+                  </div>
+
+                  {/* Score preview */}
+                  <div className="flex flex-col items-end flex-shrink-0">
+                    <span className="text-2xl font-bold" style={{ color: "var(--color-text)" }}>
+                      {Math.round(consideringVenue.match_score * 100)}%
+                    </span>
+                    <span className="text-xs" style={{ color: "var(--color-text-muted)" }}>
+                      match score
+                    </span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Streaming venue grid */}
+            {allVenues.length > 0 ? (
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                {allVenues.map((venue, index) => (
+                  <VenueDiscoveryCard
+                    key={venue.id}
+                    venue={venue}
+                    index={index}
+                    isLatest={venue.id === latestVenueId}
+                    onClick={() => {
+                      console.log("[VenueClick]", venue.venue_name);
+                    }}
+                  />
+                ))}
+              </div>
+            ) : (
+              <div className="flex flex-col items-center justify-center py-12">
+                <div className="flex items-center gap-2 mb-3">
+                  <div className="h-3 w-3 rounded-full animate-bounce" style={{ background: "var(--color-accent)" }} />
+                  <div className="h-3 w-3 rounded-full animate-bounce" style={{ background: "var(--color-accent)", animationDelay: "150ms" }} />
+                  <div className="h-3 w-3 rounded-full animate-bounce" style={{ background: "var(--color-accent)", animationDelay: "300ms" }} />
+                </div>
+                <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>
+                  Searching for matching venues...
+                </p>
+              </div>
+            )}
           </div>
         )}
 
@@ -982,7 +1089,7 @@ export default function Home() {
                       Location Discovery Complete!
                     </h2>
                     <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>
-                      Found <strong style={{ color: "var(--color-success)" }}>{venuesByScene.size}</strong> real venues for {locations.filter(l => selectedLocationIds.has(l.scene_id)).length} scenes
+                      Found <strong style={{ color: "var(--color-success)" }}>{allVenues.length}</strong> real venues for {locations.filter(l => selectedLocationIds.has(l.scene_id)).length} scenes
                     </p>
                   </div>
                 </div>
@@ -1003,16 +1110,29 @@ export default function Home() {
               </div>
             </div>
 
-            {/* All scene/venue flip cards */}
+            {/* All discovered venues */}
             <div className="mb-4 flex items-center justify-between">
               <h2 className="text-lg font-medium" style={{ fontFamily: "var(--font-display)", color: "var(--color-text)" }}>
-                Scenes & Discovered Venues ({venuesByScene.size})
+                Discovered Venues ({allVenues.length})
               </h2>
             </div>
-            <SceneVenueFlipGrid
-              locations={locations.filter(l => selectedLocationIds.has(l.scene_id))}
-              venuesByScene={venuesByScene}
-            />
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+              {allVenues.map((venue, index) => (
+                <div
+                  key={venue.id}
+                  className="animate-fade-in"
+                  style={{ animationDelay: `${Math.min(index * 30, 300)}ms` }}
+                >
+                  <VenueCard
+                    venue={venue}
+                    isLatest={false}
+                    onClick={() => {
+                      console.log("[VenueClick]", venue.venue_name);
+                    }}
+                  />
+                </div>
+              ))}
+            </div>
           </div>
         )}
 
@@ -2232,6 +2352,132 @@ function VenueCard({ venue, isLatest, onClick }: { venue: LocationCandidate; isL
             {venue.match_reasoning}
           </p>
         )}
+      </div>
+    </div>
+  );
+}
+
+// Venue discovery card - animated card that pops in during streaming
+function VenueDiscoveryCard({
+  venue,
+  index,
+  isLatest,
+  onClick,
+}: {
+  venue: LocationCandidate;
+  index: number;
+  isLatest: boolean;
+  onClick: () => void;
+}) {
+  const [imageLoaded, setImageLoaded] = useState(false);
+  const [imageError, setImageError] = useState(false);
+  const hasPhoto = venue.photo_urls && venue.photo_urls.length > 0 && !imageError;
+
+  // Stagger animation delay based on index (capped at 500ms for performance)
+  const animationDelay = `${Math.min(index * 50, 500)}ms`;
+
+  return (
+    <div
+      className={`paper-card overflow-hidden rounded-lg cursor-pointer transition-all hover:scale-[1.02] animate-venue-pop ${isLatest ? "animate-glow" : ""}`}
+      style={{
+        animationDelay,
+        borderColor: isLatest ? "var(--color-accent)" : undefined,
+        height: "260px",
+      }}
+      onClick={onClick}
+    >
+      {/* Image section with shimmer loading */}
+      <div className="relative h-32 overflow-hidden" style={{ background: "var(--color-bg-muted)" }}>
+        {hasPhoto ? (
+          <>
+            {/* Shimmer while loading */}
+            {!imageLoaded && (
+              <div className="absolute inset-0 animate-shimmer" />
+            )}
+            <img
+              src={venue.photo_urls[0]}
+              alt={venue.venue_name}
+              className={`w-full h-full object-cover transition-opacity duration-300 ${imageLoaded ? "opacity-100" : "opacity-0"}`}
+              onLoad={() => setImageLoaded(true)}
+              onError={() => setImageError(true)}
+            />
+          </>
+        ) : (
+          <div className="w-full h-full flex items-center justify-center">
+            <svg className="h-10 w-10" style={{ color: "var(--color-text-subtle)" }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v12a1.5 1.5 0 001.5 1.5zm10.5-11.25h.008v.008h-.008V8.25zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z" />
+            </svg>
+          </div>
+        )}
+
+        {/* Match score badge */}
+        <div
+          className="absolute top-2 right-2 flex items-center gap-1 px-2 py-1 rounded-full text-xs font-bold"
+          style={{
+            background: venue.match_score >= 0.7 ? "var(--color-success)" : "var(--color-warning)",
+            color: "white",
+          }}
+        >
+          {Math.round(venue.match_score * 100)}%
+        </div>
+
+        {/* NEW badge for latest venue */}
+        {isLatest && (
+          <div className="absolute top-2 left-2">
+            <div
+              className="px-2 py-0.5 rounded text-[10px] font-bold uppercase"
+              style={{ background: "var(--color-accent)", color: "white" }}
+            >
+              New
+            </div>
+            {/* Ping effect behind the badge */}
+            <div
+              className="absolute inset-0 rounded animate-ping-slow"
+              style={{ background: "var(--color-accent)" }}
+            />
+          </div>
+        )}
+      </div>
+
+      {/* Venue info */}
+      <div className="p-3 flex flex-col" style={{ height: "128px" }}>
+        <h4
+          className="text-sm font-semibold leading-tight truncate"
+          style={{ fontFamily: "var(--font-display)", color: "var(--color-text)" }}
+          title={venue.venue_name}
+        >
+          {venue.venue_name}
+        </h4>
+        <p
+          className="mt-1 text-xs leading-relaxed line-clamp-2"
+          style={{ color: "var(--color-text-muted)" }}
+        >
+          {venue.formatted_address}
+        </p>
+
+        {/* Quick stats */}
+        <div className="mt-auto pt-2 flex items-center justify-between text-[10px]" style={{ borderTop: "1px solid var(--color-border-subtle)" }}>
+          <div className="flex items-center gap-2">
+            {venue.google_rating && (
+              <span className="flex items-center gap-1" style={{ color: "var(--color-text-secondary)" }}>
+                <svg className="h-3 w-3" fill="var(--color-warning)" viewBox="0 0 24 24">
+                  <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+                </svg>
+                {venue.google_rating.toFixed(1)}
+              </span>
+            )}
+            {venue.phone_number ? (
+              <span className="flex items-center gap-1" style={{ color: "var(--color-success)" }}>
+                <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z" />
+                </svg>
+              </span>
+            ) : (
+              <span style={{ color: "var(--color-text-subtle)" }}>No phone</span>
+            )}
+          </div>
+          {/* Scene reference could go here */}
+        </div>
       </div>
     </div>
   );
