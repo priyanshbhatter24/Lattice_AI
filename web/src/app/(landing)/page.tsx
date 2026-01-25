@@ -113,9 +113,24 @@ export default function LandingPage() {
           </p>
 
           <div className="hero-cta-group">
-            <Link href={ctaHref} className="cta-primary">
+            <Link
+              href={ctaHref}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "0.5rem",
+                padding: "1rem 1.75rem",
+                background: "#c9a227",
+                color: "#0a0908",
+                fontSize: "1rem",
+                fontWeight: 600,
+                textDecoration: "none",
+                borderRadius: "4px",
+                transition: "all 0.3s",
+              }}
+            >
               {ctaText}
-              <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
+              <svg width="18" height="18" viewBox="0 0 20 20" fill="currentColor" style={{ flexShrink: 0 }}>
                 <path fillRule="evenodd" d="M3 10a.75.75 0 01.75-.75h10.638L10.23 5.29a.75.75 0 111.04-1.08l5.5 5.25a.75.75 0 010 1.08l-5.5 5.25a.75.75 0 11-1.04-1.08l4.158-3.96H3.75A.75.75 0 013 10z" clipRule="evenodd" />
               </svg>
             </Link>
@@ -232,9 +247,24 @@ export default function LandingPage() {
             <p className="cta-subtitle">
               Join production teams using AI to find their perfect locations.
             </p>
-            <Link href={ctaHref} className="cta-button">
+            <Link
+              href={ctaHref}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "0.5rem",
+                padding: "1rem 2rem",
+                background: "#c9a227",
+                color: "#0a0908",
+                fontSize: "1rem",
+                fontWeight: 600,
+                textDecoration: "none",
+                borderRadius: "4px",
+                transition: "all 0.3s",
+              }}
+            >
               {ctaText}
-              <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
+              <svg width="18" height="18" viewBox="0 0 20 20" fill="currentColor" style={{ flexShrink: 0 }}>
                 <path fillRule="evenodd" d="M3 10a.75.75 0 01.75-.75h10.638L10.23 5.29a.75.75 0 111.04-1.08l5.5 5.25a.75.75 0 010 1.08l-5.5 5.25a.75.75 0 11-1.04-1.08l4.158-3.96H3.75A.75.75 0 013 10z" clipRule="evenodd" />
               </svg>
             </Link>
