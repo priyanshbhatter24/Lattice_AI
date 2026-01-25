@@ -112,6 +112,29 @@ Return JSON:
 When in doubt, say "same" - it's better to scout one location than two similar ones. Respond with valid JSON only."""
 
 
+# Location types that can be merged for scouting purposes
+MERGEABLE_LOCATION_TYPES = [
+    (r"dorm\s*room", "DORM ROOM"),
+    (r"bedroom", "BEDROOM"),
+    (r"bathroom", "BATHROOM"),
+    (r"kitchen", "KITCHEN"),
+    (r"living\s*room", "LIVING ROOM"),
+    (r"office(?!\s+building)", "OFFICE"),
+    (r"classroom", "CLASSROOM"),
+    (r"hallway|corridor", "HALLWAY"),
+    (r"lobby", "LOBBY"),
+    (r"elevator", "ELEVATOR"),
+    (r"stairwell|stairs", "STAIRWELL"),
+    (r"parking\s*(lot|garage)", "PARKING"),
+    (r"conference\s*room", "CONFERENCE ROOM"),
+    (r"hospital\s*room", "HOSPITAL ROOM"),
+    (r"hotel\s*room", "HOTEL ROOM"),
+    (r"bar(?!\w)", "BAR"),
+    (r"restaurant", "RESTAURANT"),
+    (r"cafe|coffee\s*shop", "CAFE"),
+]
+
+
 def _normalize_vibe(value: str | None) -> VibeCategory | None:
     """Normalize a vibe string to a VibeCategory enum."""
     if not value:
@@ -326,6 +349,76 @@ async def process_locations_streaming(
     await asyncio.gather(*tasks, return_exceptions=True)
 
 
+def _get_location_type(header: str) -> str | None:
+    """Check if a header matches a mergeable location type."""
+    h = header.lower()
+    for pattern, type_name in MERGEABLE_LOCATION_TYPES:
+        if re.search(pattern, h):
+            logger.debug(f"Location type match: '{header}' -> {type_name}")
+            return type_name
+    return None
+
+
+def _merge_by_location_type(locations: list[UniqueLocation]) -> tuple[list[UniqueLocation], int]:
+    """
+    Merge locations that are the same TYPE for scouting purposes.
+    E.g., all dorm rooms can be filmed at one dorm room set.
+    Returns (merged_locations, merge_count).
+    """
+    # Group by location type
+    type_groups: dict[str, list[UniqueLocation]] = {}
+    non_typed: list[UniqueLocation] = []
+
+    logger.info(f"Type-based merge: processing {len(locations)} locations")
+
+    for loc in locations:
+        loc_type = _get_location_type(loc.scene_header)
+        if loc_type:
+            if loc_type not in type_groups:
+                type_groups[loc_type] = []
+            type_groups[loc_type].append(loc)
+        else:
+            non_typed.append(loc)
+
+    logger.info(f"Type groups found: {list(type_groups.keys())}, non-typed: {len(non_typed)}")
+
+    # Merge each type group
+    merged_locations = list(non_typed)
+    total_merged = 0
+
+    for loc_type, locs in type_groups.items():
+        if len(locs) == 1:
+            merged_locations.append(locs[0])
+        else:
+            # Sort by page number to get earliest occurrence first
+            locs.sort(key=lambda x: x.page_numbers[0] if x.page_numbers else 999)
+
+            # Create merged location with combined info
+            canonical = locs[0]
+            all_headers = [loc.scene_header for loc in locs]
+
+            # Use a generic header for the merged location
+            interior_ext = canonical.interior_exterior
+            for loc in locs[1:]:
+                canonical.occurrences.extend(loc.occurrences)
+                canonical.page_numbers = sorted(set(canonical.page_numbers + loc.page_numbers))
+                if canonical.time_of_day != loc.time_of_day:
+                    canonical.time_of_day = "both"
+                if interior_ext != loc.interior_exterior:
+                    interior_ext = "both"
+
+            canonical.interior_exterior = interior_ext
+            # Update header to show it's a merged type
+            canonical.scene_header = f"INT. {loc_type}" if interior_ext == "interior" else f"INT./EXT. {loc_type}"
+
+            merged_locations.append(canonical)
+            total_merged += len(locs) - 1
+            logger.info(f"Merged {len(locs)} locations into {loc_type}", headers=all_headers)
+
+    merged_locations.sort(key=lambda loc: loc.page_numbers[0] if loc.page_numbers else 0)
+    return merged_locations, total_merged
+
+
 def _normalize_header_for_matching(header: str) -> str:
     """
     Normalize a scene header for matching purposes.
@@ -427,10 +520,11 @@ async def deduplicate_locations_with_llm(
     locations: list[UniqueLocation],
 ) -> list[UniqueLocation]:
     """
-    Three-pass deduplication:
+    Four-pass deduplication for aggressive location merging:
     0. Pre-merge: Automatically merge obvious duplicates (same location, different INT/EXT or time of day)
     1. Name-based: merge similar names with LLM assistance, flag ambiguous ones
     2. Context-based: for flagged locations, look at script context to decide
+    3. Type-based: merge all locations of the same type (e.g., all dorm rooms → one dorm room set)
     """
     if not locations:
         return locations
@@ -532,6 +626,12 @@ async def deduplicate_locations_with_llm(
 
             except Exception as e:
                 logger.warning("Pass 2 deduplication failed", error=str(e))
+
+    # === PASS 3: Type-based merge for scouting efficiency ===
+    # Merge all locations of the same type (e.g., all dorm rooms → one dorm room set)
+    locations, type_merged = _merge_by_location_type(locations)
+    if type_merged > 0:
+        logger.info("Type-based merge complete", merged=type_merged, remaining=len(locations))
 
     logger.info("Deduplication complete", final_count=len(locations))
     return locations

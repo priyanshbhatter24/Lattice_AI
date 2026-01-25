@@ -108,37 +108,41 @@ export default function Home() {
             const msg = event.data.message;
             setStatus(msg);
 
+            // Log all status messages for debugging
+            console.log("[SSE] Status:", msg, "| total:", event.data.total);
+
             if (msg.includes("Extracted") && msg.includes("pages")) {
               setPageCount(event.data.pages || null);
-            } else if (msg.includes("Found") && msg.includes("locations") && msg.includes("deduplicating")) {
-              // Found X locations, deduplicating...
+            } else if (msg.includes("deduplicating")) {
+              // "Found X locations, deduplicating..." - start of dedupe
               const initialCount = event.data.total || 0;
+              console.log("[SSE] Dedupe START:", initialCount);
               initialLocationCountRef.current = initialCount;
               setTotalLocations(initialCount);
-
-              // Start dedupe animation
               setDedupeAnimation({ before: initialCount, after: initialCount });
 
               // Delay the phase transition so the checkmark animation completes
               phaseTimeoutRef.current = setTimeout(() => {
                 setCurrentPhase("deduplicating");
               }, 800);
-            } else if (msg.includes("Merged to") || (msg.includes("unique locations") && !msg.includes("deduplicating"))) {
-              // Deduplication complete
+            } else if (msg.includes("Merged") || msg.includes("unique")) {
+              // Deduplication complete - "Merged to X unique locations" or "Found X unique locations"
               const finalCount = event.data.total || 0;
-              setTotalLocations(finalCount);
-
-              // Animate the merge using the ref for initial count
               const beforeCount = initialLocationCountRef.current || finalCount;
+              console.log("[SSE] Dedupe END:", beforeCount, "->", finalCount);
+              setTotalLocations(finalCount);
+              // Force update animation with both values
               setDedupeAnimation({ before: beforeCount, after: finalCount });
             } else if (msg.includes("Analyzing locations")) {
-              // Clear any pending transition and move to analyzing
+              // Keep showing dedupe result for a moment before transitioning
               if (phaseTimeoutRef.current) {
                 clearTimeout(phaseTimeoutRef.current);
               }
-              setCurrentPhase("analyzing");
-              // Clear dedupe animation after a short delay
-              setTimeout(() => setDedupeAnimation(null), 500);
+              // Delay transition to analyzing so user can see final merge count
+              phaseTimeoutRef.current = setTimeout(() => {
+                setCurrentPhase("analyzing");
+                setTimeout(() => setDedupeAnimation(null), 300);
+              }, 1500);
             }
             break;
           }
@@ -557,9 +561,9 @@ export default function Home() {
               )}
             </div>
 
-            {/* Dedupe Animation - shows during merge phase */}
-            {currentPhase === "deduplicating" && dedupeAnimation && (
-              <div className="animate-fade-in">
+            {/* Dedupe Animation - shows during merge phase and briefly during transition */}
+            {dedupeAnimation && (currentPhase === "deduplicating" || currentPhase === "analyzing") && (
+              <div className={`animate-fade-in ${currentPhase === "analyzing" ? "opacity-50 transition-opacity duration-500" : ""}`}>
                 <DedupeAnimation before={dedupeAnimation.before} after={dedupeAnimation.after} />
               </div>
             )}
@@ -708,7 +712,7 @@ function DedupeAnimation({ before, after }: { before: number; after: number }) {
   const [mergePhase, setMergePhase] = useState<'showing' | 'merging' | 'merged'>('showing');
   const totalMerged = before - after;
 
-  // Cycle through merge animations
+  // Cycle through merge animations - faster pace
   useEffect(() => {
     const timer = setInterval(() => {
       setMergePhase(prev => {
@@ -718,7 +722,7 @@ function DedupeAnimation({ before, after }: { before: number; after: number }) {
         setCurrentMergeIndex(i => (i + 1) % MERGE_PAIRS.length);
         return 'showing';
       });
-    }, 1200); // Change phase every 1.2 seconds
+    }, 700); // Change phase every 0.7 seconds
 
     return () => clearInterval(timer);
   }, []);
@@ -753,12 +757,12 @@ function DedupeAnimation({ before, after }: { before: number; after: number }) {
       </div>
 
       {/* Merge Animation Area */}
-      <div className="relative flex items-center justify-center gap-4 py-8">
+      <div className="relative flex items-center justify-center gap-4 py-6">
         {/* Left Card */}
         <div
-          className="w-64 transition-all duration-500 ease-out"
+          className="w-56 transition-all duration-300 ease-[cubic-bezier(0.4,0,0.2,1)]"
           style={{
-            transform: mergePhase === 'merging' ? 'translateX(60px) scale(0.95)' : mergePhase === 'merged' ? 'translateX(120px) scale(0)' : 'translateX(0) scale(1)',
+            transform: mergePhase === 'merging' ? 'translateX(50px) scale(0.92)' : mergePhase === 'merged' ? 'translateX(100px) scale(0)' : 'translateX(0) scale(1)',
             opacity: mergePhase === 'merged' ? 0 : 1,
           }}
         >
@@ -768,19 +772,19 @@ function DedupeAnimation({ before, after }: { before: number; after: number }) {
         {/* Center - Merge indicator or merged result */}
         <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-10">
           {mergePhase === 'merged' ? (
-            <div className="w-72 animate-fade-in">
+            <div className="w-64 animate-fade-in">
               <MergeCard location={currentPair.merged} status="result" />
             </div>
           ) : (
             <div
-              className="flex h-12 w-12 items-center justify-center rounded-full transition-all duration-300"
+              className="flex h-10 w-10 items-center justify-center rounded-full transition-all duration-200 ease-out"
               style={{
                 background: mergePhase === 'merging' ? 'var(--color-accent)' : 'var(--color-bg-muted)',
                 color: mergePhase === 'merging' ? 'white' : 'var(--color-text-muted)',
-                transform: mergePhase === 'merging' ? 'scale(1.1)' : 'scale(1)',
+                transform: mergePhase === 'merging' ? 'scale(1.15)' : 'scale(1)',
               }}
             >
-              <svg className={`h-6 w-6 ${mergePhase === 'merging' ? 'animate-pulse' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
               </svg>
             </div>
@@ -789,9 +793,9 @@ function DedupeAnimation({ before, after }: { before: number; after: number }) {
 
         {/* Right Card */}
         <div
-          className="w-64 transition-all duration-500 ease-out"
+          className="w-56 transition-all duration-300 ease-[cubic-bezier(0.4,0,0.2,1)]"
           style={{
-            transform: mergePhase === 'merging' ? 'translateX(-60px) scale(0.95)' : mergePhase === 'merged' ? 'translateX(-120px) scale(0)' : 'translateX(0) scale(1)',
+            transform: mergePhase === 'merging' ? 'translateX(-50px) scale(0.92)' : mergePhase === 'merged' ? 'translateX(-100px) scale(0)' : 'translateX(0) scale(1)',
             opacity: mergePhase === 'merged' ? 0 : 1,
           }}
         >
@@ -800,14 +804,14 @@ function DedupeAnimation({ before, after }: { before: number; after: number }) {
       </div>
 
       {/* Progress dots */}
-      <div className="flex justify-center gap-2 mt-2">
+      <div className="flex justify-center gap-1.5 mt-1">
         {MERGE_PAIRS.map((_, i) => (
           <div
             key={i}
-            className="h-2 w-2 rounded-full transition-all duration-300"
+            className="h-1.5 w-1.5 rounded-full transition-all duration-200"
             style={{
               background: i === currentMergeIndex ? 'var(--color-accent)' : 'var(--color-border)',
-              transform: i === currentMergeIndex ? 'scale(1.2)' : 'scale(1)',
+              transform: i === currentMergeIndex ? 'scale(1.3)' : 'scale(1)',
             }}
           />
         ))}
