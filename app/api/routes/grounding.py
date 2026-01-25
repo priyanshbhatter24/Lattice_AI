@@ -24,14 +24,44 @@ from app.db.repository import (
 from app.grounding.grounding_agent import GroundingAgent
 from app.grounding.models import (
     Constraints,
+    LocationCandidate,
     LocationRequirement,
     Vibe,
     VibeCategory,
+    CandidateStatus,
+    VapiCallStatus,
 )
 
 logger = structlog.get_logger()
 
 router = APIRouter(prefix="/api/grounding", tags=["grounding"])
+
+
+def _create_demo_cafe_candidate(scene_id: str, project_id: str) -> LocationCandidate:
+    """
+    Create a demo cafe candidate for testing AI voice calls.
+    This is always injected as the first result for testing purposes.
+    """
+    return LocationCandidate(
+        scene_id=scene_id,
+        project_id=project_id,
+        venue_name="DEMO CALL CAFE",
+        formatted_address="123 Demo Street, Los Angeles, CA 90001",
+        latitude=34.0522,
+        longitude=-118.2437,
+        phone_number="+19095069035",
+        website_url="https://democallcafe.example.com",
+        google_rating=4.8,
+        google_review_count=256,
+        price_level=2,
+        match_score=0.95,
+        match_reasoning="Perfect test venue for demonstrating AI voice calling capabilities. Features authentic cafe atmosphere with flexible filming hours and production-friendly management.",
+        distance_from_center_km=0.5,
+        status=CandidateStatus.PENDING_CALL,
+        vapi_call_status=VapiCallStatus.NOT_INITIATED,
+        photo_urls=[],
+        visual_features_detected=["cozy interior", "natural lighting", "vintage decor"],
+    )
 
 
 # ══════════════════════════════════════════════════════════
@@ -207,24 +237,28 @@ async def ground_scenes_stream(
                         save_to_db=False,
                     )
 
-                    # Send each candidate
-                    for candidate in result.candidates:
+                    # Inject demo cafe as first candidate for testing
+                    demo_cafe = _create_demo_cafe_candidate(scene_id, scene["project_id"])
+                    all_scene_candidates = [demo_cafe] + list(result.candidates)
+
+                    # Send each candidate (demo cafe first)
+                    for candidate in all_scene_candidates:
                         await result_queue.put(("candidate", {
                             "scene_id": scene_id,
                             "candidate": _candidate_to_dict(candidate),
                         }))
 
-                    # Save to DB if requested
-                    if request.save_to_db and result.candidates:
-                        candidate_repo.create_many(result.candidates)
+                    # Save to DB if requested (including demo cafe)
+                    if request.save_to_db and all_scene_candidates:
+                        candidate_repo.create_many(all_scene_candidates)
                         scene_repo.update_status(scene_id, "candidates_found")
 
                     # Signal scene complete - convert candidates to dicts for JSON serialization
                     await result_queue.put(("scene_complete", {
                         "scene_id": scene_id,
                         "scene_header": scene["scene_header"],
-                        "candidates_found": len(result.candidates),
-                        "candidates": [_candidate_to_dict(c) for c in result.candidates],
+                        "candidates_found": len(all_scene_candidates),
+                        "candidates": [_candidate_to_dict(c) for c in all_scene_candidates],
                         "query_used": result.query_used,
                         "processing_time": result.processing_time_seconds,
                     }))

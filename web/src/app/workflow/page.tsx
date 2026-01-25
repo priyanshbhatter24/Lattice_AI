@@ -42,6 +42,7 @@ export default function Home() {
   const phaseTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const initialLocationCountRef = useRef<number>(0);
 
+
   // Selection state
   const [selectedLocationIds, setSelectedLocationIds] = useState<Set<string>>(new Set());
 
@@ -110,7 +111,7 @@ export default function Home() {
 
       const newProject = await createProject({
         name: projectName,
-        company_name: "Location Scout",
+        company_name: "Scout",
         target_city: "Los Angeles, CA",
       });
 
@@ -163,7 +164,10 @@ export default function Home() {
               const originalSceneId = dbIdToOriginalId.get(event.data.scene_id) || event.data.scene_id;
               setVenuesByScene(prev => {
                 const next = new Map(prev);
-                next.set(originalSceneId, event.data.candidate);
+                // Only keep the first candidate per scene (the demo cafe)
+                if (!next.has(originalSceneId)) {
+                  next.set(originalSceneId, event.data.candidate);
+                }
                 return next;
               });
               break;
@@ -400,7 +404,7 @@ export default function Home() {
             {/* Film reel inspired icon */}
             <div
               className="flex h-9 w-9 items-center justify-center rounded-full"
-              style={{ background: "var(--color-text)", color: "var(--color-bg-elevated)" }}
+              style={{ background: "var(--color-accent)", color: "var(--color-bg-elevated)" }}
             >
               <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <circle cx="12" cy="12" r="10" />
@@ -416,7 +420,7 @@ export default function Home() {
                 className="text-base font-semibold tracking-tight"
                 style={{ fontFamily: "var(--font-display)", color: "var(--color-text)" }}
               >
-                Location Scout
+                Scout
               </h1>
               <p className="text-[10px] uppercase tracking-widest" style={{ color: "var(--color-text-subtle)" }}>
                 Script Analysis
@@ -467,6 +471,13 @@ export default function Home() {
           <div className="animate-fade-in">
             {/* Hero */}
             <div className="mb-10 text-center">
+              <div
+                className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wider mb-4"
+                style={{ background: "var(--color-accent-light)", color: "var(--color-accent)", border: "1px solid var(--color-accent)" }}
+              >
+                <span className="h-1.5 w-1.5 rounded-full animate-pulse" style={{ background: "var(--color-accent)" }} />
+                AI-Powered Analysis
+              </div>
               <h2
                 className="text-3xl font-medium tracking-tight sm:text-4xl"
                 style={{ fontFamily: "var(--font-display)", color: "var(--color-text)" }}

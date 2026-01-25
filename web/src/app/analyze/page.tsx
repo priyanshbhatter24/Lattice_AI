@@ -297,7 +297,7 @@ function AnalyzePageContent() {
                   className="text-base font-semibold tracking-tight"
                   style={{ fontFamily: "var(--font-display)", color: "var(--color-text)" }}
                 >
-                  Location Scout
+                  Scout
                 </h1>
                 <p className="text-[10px] uppercase tracking-widest" style={{ color: "var(--color-text-subtle)" }}>
                   Script Analysis

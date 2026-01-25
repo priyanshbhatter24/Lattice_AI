@@ -206,6 +206,7 @@ function CallsDashboardContent() {
           top: 0,
           zIndex: 50,
           backgroundColor: "var(--color-bg-elevated)",
+          backdropFilter: "blur(8px)",
           borderBottom: "1px solid var(--color-border)",
           padding: "1rem 1.5rem",
         }}
@@ -219,25 +220,50 @@ function CallsDashboardContent() {
             justifyContent: "space-between",
           }}
         >
-          <div>
-            <h1
+          <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+            {/* Logo icon */}
+            <div
               style={{
-                fontFamily: "var(--font-display)",
-                fontSize: "1.25rem",
-                fontWeight: 600,
-                color: "var(--color-text)",
+                width: "2.25rem",
+                height: "2.25rem",
+                borderRadius: "50%",
+                background: "var(--color-accent)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
               }}
             >
-              Voice Outreach
-            </h1>
-            <p
-              style={{
-                fontSize: "0.8125rem",
-                color: "var(--color-text-muted)",
-              }}
-            >
-              Call venues to check availability and pricing
-            </p>
+              <svg style={{ width: "1rem", height: "1rem", color: "var(--color-bg-elevated)" }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="12" cy="12" r="10" />
+                <circle cx="12" cy="12" r="3" />
+                <circle cx="12" cy="5" r="1" fill="currentColor" />
+                <circle cx="12" cy="19" r="1" fill="currentColor" />
+                <circle cx="5" cy="12" r="1" fill="currentColor" />
+                <circle cx="19" cy="12" r="1" fill="currentColor" />
+              </svg>
+            </div>
+            <div>
+              <h1
+                style={{
+                  fontFamily: "var(--font-display)",
+                  fontSize: "1.125rem",
+                  fontWeight: 600,
+                  color: "var(--color-text)",
+                }}
+              >
+                Voice Outreach
+              </h1>
+              <p
+                style={{
+                  fontSize: "0.6875rem",
+                  color: "var(--color-text-muted)",
+                  textTransform: "uppercase",
+                  letterSpacing: "0.1em",
+                }}
+              >
+                AI Phone Calls
+              </p>
+            </div>
           </div>
 
           {/* Project selector */}
@@ -274,7 +300,7 @@ function CallsDashboardContent() {
             {/* Navigation links */}
             <nav style={{ display: "flex", gap: "0.5rem" }}>
               <a
-                href="/"
+                href="/workflow"
                 style={{
                   padding: "0.5rem 0.75rem",
                   color: "var(--color-text-muted)",
