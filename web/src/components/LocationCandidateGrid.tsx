@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import type { LocationCandidate } from "@/lib/types";
 import LocationCandidateCard from "./LocationCandidateCard";
 
@@ -11,7 +12,7 @@ interface LocationCandidateGridProps {
   onApprove?: (id: string) => Promise<void>;
   onReject?: (id: string, reason: string) => Promise<void>;
   onViewDetails?: (id: string) => void;
-  emptyMessage?: string;
+  emptyMessage?: ReactNode;
 }
 
 export default function LocationCandidateGrid({

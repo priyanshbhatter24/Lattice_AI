@@ -307,3 +307,89 @@ export interface RealtimePayload<T = LocationCandidate> {
   new: T;
   old: T | null;
 }
+
+// ══════════════════════════════════════════════════════════
+// Stage 2: Grounding Types
+// ══════════════════════════════════════════════════════════
+
+// Scene with grounding status
+export interface GroundableScene {
+  id: string;
+  project_id: string;
+  scene_number: string;
+  scene_header: string;
+  page_numbers: number[];
+  script_excerpt: string;
+  vibe: Vibe;
+  constraints: Constraints;
+  estimated_shoot_hours: number;
+  priority: "critical" | "important" | "flexible";
+  status: "pending" | "candidates_found" | "call_in_progress" | "completed";
+  candidate_count: number;
+  has_candidates: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+// Grounding SSE event types
+export type GroundingSSEEventType =
+  | "status"
+  | "scene_start"
+  | "candidate"
+  | "scene_complete"
+  | "progress"
+  | "complete"
+  | "error";
+
+export interface GroundingStatusEvent {
+  message: string;
+}
+
+export interface GroundingSceneStartEvent {
+  scene_id: string;
+  scene_header: string;
+  index: number;
+  total: number;
+}
+
+export interface GroundingCandidateEvent {
+  scene_id: string;
+  candidate: LocationCandidate;
+}
+
+export interface GroundingSceneCompleteEvent {
+  scene_id: string;
+  scene_header: string;
+  candidates_found: number;
+  query_used: string;
+  processing_time: number;
+  errors: string[];
+  warnings: string[];
+}
+
+export interface GroundingProgressEvent {
+  processed: number;
+  total: number;
+  percent: number;
+}
+
+export interface GroundingCompleteEvent {
+  success: boolean;
+  total_scenes: number;
+  total_candidates: number;
+  message: string;
+}
+
+export interface GroundingErrorEvent {
+  scene_id?: string;
+  error: string;
+}
+
+export type GroundingSSEEvent =
+  | { type: "status"; data: GroundingStatusEvent }
+  | { type: "scene_start"; data: GroundingSceneStartEvent }
+  | { type: "candidate"; data: GroundingCandidateEvent }
+  | { type: "scene_complete"; data: GroundingSceneCompleteEvent }
+  | { type: "progress"; data: GroundingProgressEvent }
+  | { type: "complete"; data: GroundingCompleteEvent }
+  | { type: "error"; data: GroundingErrorEvent };

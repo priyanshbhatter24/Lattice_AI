@@ -3,7 +3,21 @@
  * Handles script upload, analysis with SSE streaming, and script listing.
  */
 
-import type { SSEEvent, AvailableScript, LocationRequirement } from "./types";
+import type {
+  SSEEvent,
+  AvailableScript,
+  LocationRequirement,
+  Project,
+  CreateProjectRequest,
+  LocationCandidate,
+  CreateLocationRequest,
+  CallResponse,
+  BatchResponse,
+  CallStatusResponse,
+  Scene,
+  GroundableScene,
+  GroundingSSEEvent,
+} from "./types";
 
 // Backend API base URL - adjust for production
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -49,15 +63,19 @@ export function analyzeScriptWithCallback(
   const url = new URL(`${API_BASE}/api/scripts/analyze`);
   url.searchParams.set("file_path", filePath);
 
+  console.log("[SSE] Connecting to:", url.toString());
+
   // Start SSE connection
   fetch(url.toString(), {
     method: "GET",
     headers: {
       Accept: "text/event-stream",
+      "Cache-Control": "no-cache",
     },
     signal: abortController.signal,
   })
     .then(async (response) => {
+      console.log("[SSE] Response status:", response.status);
       if (!response.ok) {
         throw new Error(`Analysis failed: ${response.statusText}`);
       }
@@ -74,44 +92,53 @@ export function analyzeScriptWithCallback(
         const { done, value } = await reader.read();
 
         if (done) {
+          console.log("[SSE] Stream complete");
           onComplete();
           break;
         }
 
-        buffer += decoder.decode(value, { stream: true });
+        const chunk = decoder.decode(value, { stream: true });
+        buffer += chunk;
 
-        // Process complete SSE messages
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || ""; // Keep incomplete line in buffer
+        // Process complete SSE messages (split by double newline)
+        const messages = buffer.split(/\r?\n\r?\n/);
+        buffer = messages.pop() || ""; // Keep incomplete message in buffer
 
-        let currentEvent = "";
-        let currentData = "";
+        for (const message of messages) {
+          if (!message.trim()) continue;
 
-        for (const line of lines) {
-          if (line.startsWith("event:")) {
-            currentEvent = line.slice(6).trim();
-          } else if (line.startsWith("data:")) {
-            currentData = line.slice(5).trim();
-          } else if (line === "" && currentEvent && currentData) {
-            // End of event, process it
+          const lines = message.split(/\r?\n/);
+          let eventType = "";
+          let eventData = "";
+
+          for (const line of lines) {
+            if (line.startsWith("event:")) {
+              eventType = line.slice(6).trim();
+            } else if (line.startsWith("data:")) {
+              eventData = line.slice(5).trim();
+            }
+          }
+
+          if (eventType && eventData) {
+            console.log("[SSE] Event:", eventType);
             try {
-              const parsedData = JSON.parse(currentData);
+              const parsedData = JSON.parse(eventData);
 
               // Transform backend data to match frontend expectations
-              if (currentEvent === "location") {
+              if (eventType === "location") {
                 // Map backend field names to frontend expectations
                 const location = parsedData as Record<string, unknown>;
                 const transformed: LocationRequirement = {
                   id: location.id as string,
-                  scene_id: location.id as string, // Use id as scene_id
+                  scene_id: location.id as string,
                   project_id: (location.project_id as string) || "",
                   scene_number: (location.scene_number as string) || "",
                   scene_header: (location.scene_header as string) || "",
                   page_numbers: (location.page_numbers as number[]) || [],
-                  script_context: (location.script_excerpt as string) || "", // Map script_excerpt -> script_context
+                  script_context: (location.script_excerpt as string) || "",
                   vibe: location.vibe as LocationRequirement["vibe"],
                   constraints: location.constraints as LocationRequirement["constraints"],
-                  estimated_shoot_duration_hours: (location.estimated_shoot_hours as number) || 8, // Map estimated_shoot_hours -> estimated_shoot_duration_hours
+                  estimated_shoot_duration_hours: (location.estimated_shoot_hours as number) || 8,
                   priority: (location.priority as LocationRequirement["priority"]) || "important",
                   target_city: (location.target_city as string) || "Los Angeles, CA",
                   search_radius_km: (location.search_radius_km as number) || 50,
@@ -121,25 +148,24 @@ export function analyzeScriptWithCallback(
                 };
                 onEvent({ type: "location", data: transformed });
               } else {
-                onEvent({ type: currentEvent as SSEEvent["type"], data: parsedData });
+                onEvent({ type: eventType as SSEEvent["type"], data: parsedData });
               }
             } catch (e) {
-              console.error("Failed to parse SSE data:", currentData, e);
+              console.error("[SSE] Parse error:", eventData, e);
             }
-            currentEvent = "";
-            currentData = "";
           }
         }
       }
     })
     .catch((error) => {
       if (error.name === "AbortError") {
-        return; // Intentional abort, not an error
+        console.log("[SSE] Aborted");
+        return;
       }
+      console.error("[SSE] Error:", error);
       onError(error);
     });
 
-  // Return cleanup function
   return () => {
     abortController.abort();
   };
@@ -166,17 +192,6 @@ export type { AvailableScript };
 // ══════════════════════════════════════════════════════════
 // Stage 3: Vapi Calling API
 // ══════════════════════════════════════════════════════════
-
-import type {
-  Project,
-  CreateProjectRequest,
-  LocationCandidate,
-  CreateLocationRequest,
-  CallResponse,
-  BatchResponse,
-  CallStatusResponse,
-  Scene,
-} from "./types";
 
 // ══════════════════════════════════════════════════════════
 // Project API
@@ -330,4 +345,105 @@ export async function getCallStatus(vapiCallId: string): Promise<CallStatusRespo
   const response = await fetch(`${API_BASE}/api/calls/${vapiCallId}`);
   if (!response.ok) throw new Error("Failed to get call status");
   return response.json();
+}
+
+// ══════════════════════════════════════════════════════════
+// Stage 2: Grounding API
+// ══════════════════════════════════════════════════════════
+
+/**
+ * Get all scenes for a project that can be grounded.
+ */
+export async function getGroundableScenes(projectId: string): Promise<GroundableScene[]> {
+  const response = await fetch(`${API_BASE}/api/grounding/scenes/${projectId}`);
+  if (!response.ok) throw new Error("Failed to fetch scenes");
+  return response.json();
+}
+
+/**
+ * Ground multiple scenes with SSE streaming.
+ */
+export function groundScenesWithCallback(
+  sceneIds: string[],
+  targetCity: string,
+  maxResults: number,
+  saveToDb: boolean,
+  onEvent: (event: GroundingSSEEvent) => void,
+  onError: (error: Error) => void,
+  onComplete: () => void
+): () => void {
+  const abortController = new AbortController();
+
+  fetch(`${API_BASE}/api/grounding/ground`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "text/event-stream",
+    },
+    body: JSON.stringify({
+      scene_ids: sceneIds,
+      target_city: targetCity,
+      max_results: maxResults,
+      save_to_db: saveToDb,
+    }),
+    signal: abortController.signal,
+  })
+    .then(async (response) => {
+      if (!response.ok) {
+        throw new Error(`Grounding failed: ${response.statusText}`);
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) {
+        throw new Error("No response body");
+      }
+
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+
+        if (done) {
+          onComplete();
+          break;
+        }
+
+        buffer += decoder.decode(value, { stream: true });
+
+        // Process complete SSE messages
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        let currentEvent = "";
+        let currentData = "";
+
+        for (const line of lines) {
+          if (line.startsWith("event:")) {
+            currentEvent = line.slice(6).trim();
+          } else if (line.startsWith("data:")) {
+            currentData = line.slice(5).trim();
+          } else if (line === "" && currentEvent && currentData) {
+            try {
+              const parsedData = JSON.parse(currentData);
+              onEvent({ type: currentEvent as GroundingSSEEvent["type"], data: parsedData });
+            } catch (e) {
+              console.error("Failed to parse SSE data:", currentData, e);
+            }
+            currentEvent = "";
+            currentData = "";
+          }
+        }
+      }
+    })
+    .catch((error) => {
+      if (error.name === "AbortError") {
+        return;
+      }
+      onError(error);
+    });
+
+  return () => {
+    abortController.abort();
+  };
 }

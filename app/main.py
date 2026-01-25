@@ -1,8 +1,12 @@
+from dotenv import load_dotenv
+load_dotenv()
+
 import structlog
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes.calls import router as calls_router
+from app.api.routes.grounding import router as grounding_router
 from app.api.routes.locations import router as locations_router
 from app.api.routes.projects import router as projects_router
 from app.api.routes.scripts import router as scripts_router
@@ -41,6 +45,7 @@ app.add_middleware(
 
 # Include routers
 app.include_router(scripts_router)
+app.include_router(grounding_router)
 app.include_router(calls_router)
 app.include_router(webhooks_router)
 app.include_router(locations_router)

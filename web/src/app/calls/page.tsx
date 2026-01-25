@@ -267,18 +267,33 @@ function CallsDashboardContent() {
               ))}
             </select>
 
-            {/* Link back to home */}
-            <a
-              href="/"
-              style={{
-                padding: "0.5rem 0.75rem",
-                color: "var(--color-text-muted)",
-                fontSize: "0.875rem",
-                textDecoration: "none",
-              }}
-            >
-              Script Analysis
-            </a>
+            {/* Navigation links */}
+            <nav style={{ display: "flex", gap: "0.5rem" }}>
+              <a
+                href="/"
+                style={{
+                  padding: "0.5rem 0.75rem",
+                  color: "var(--color-text-muted)",
+                  fontSize: "0.8125rem",
+                  textDecoration: "none",
+                  borderRadius: "4px",
+                }}
+              >
+                Script Analysis
+              </a>
+              <a
+                href={`/grounding${selectedProjectId ? `?project=${selectedProjectId}` : ""}`}
+                style={{
+                  padding: "0.5rem 0.75rem",
+                  color: "var(--color-text-muted)",
+                  fontSize: "0.8125rem",
+                  textDecoration: "none",
+                  borderRadius: "4px",
+                }}
+              >
+                Location Discovery
+              </a>
+            </nav>
           </div>
         </div>
       </header>
@@ -552,7 +567,17 @@ function CallsDashboardContent() {
             onTriggerCall={handleTriggerCall}
             onApprove={handleApprove}
             onReject={handleReject}
-            emptyMessage="No locations found for this project. Run the grounding stage first."
+            emptyMessage={
+              <span>
+                No locations found.{" "}
+                <a
+                  href={`/grounding?project=${selectedProjectId}`}
+                  style={{ color: "var(--color-accent)", textDecoration: "none" }}
+                >
+                  Discover locations first &rarr;
+                </a>
+              </span>
+            }
           />
         )}
       </div>

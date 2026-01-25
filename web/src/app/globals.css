@@ -326,3 +326,59 @@ body::before {
 .paper-card {
   border-radius: 6px;
 }
+
+/* New location highlight */
+.location-new {
+  animation: newLocationPulse 2s ease-out;
+}
+
+@keyframes newLocationPulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(139, 58, 58, 0.4);
+  }
+  70% {
+    box-shadow: 0 0 0 10px rgba(139, 58, 58, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(139, 58, 58, 0);
+  }
+}
+
+/* Bounce animation with delays */
+.animate-bounce-delay-1 { animation-delay: 150ms; }
+.animate-bounce-delay-2 { animation-delay: 300ms; }
+
+/* Step completion checkmark animation */
+@keyframes checkmark {
+  0% {
+    transform: scale(0);
+    opacity: 0;
+  }
+  50% {
+    transform: scale(1.2);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.animate-checkmark {
+  animation: checkmark 0.4s ease-out forwards;
+}
+
+/* Merge card exit animation */
+@keyframes mergeCardExit {
+  0% {
+    opacity: 1;
+    transform: scale(1) translateX(0);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(0.9) translateX(-20px);
+  }
+}
+
+.merge-card-exit {
+  animation: mergeCardExit 0.5s ease-out forwards;
+}

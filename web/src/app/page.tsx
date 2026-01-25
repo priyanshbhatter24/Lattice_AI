@@ -5,12 +5,11 @@ import { uploadScript, analyzeScriptWithCallback, getAvailableScripts, type Avai
 import type { LocationRequirement, AnalysisProgress, SSEEvent } from "@/lib/types";
 
 type AppState = "idle" | "uploading" | "analyzing" | "complete";
-type AnalysisPhase = "connecting" | "extracting" | "identifying" | "deduplicating" | "analyzing" | "complete";
+type AnalysisPhase = "parsing" | "deduplicating" | "analyzing" | "complete";
 
 const ANALYSIS_STEPS = [
-  { phase: "extracting", label: "Extract", sublabel: "PDF parsing" },
-  { phase: "identifying", label: "Identify", sublabel: "Scene headers" },
-  { phase: "deduplicating", label: "Dedupe", sublabel: "Merge similar" },
+  { phase: "parsing", label: "Parse", sublabel: "Extract scenes" },
+  { phase: "deduplicating", label: "Merge", sublabel: "Deduplicate" },
   { phase: "analyzing", label: "Analyze", sublabel: "AI processing" },
   { phase: "complete", label: "Done", sublabel: "Complete" },
 ] as const;
@@ -20,14 +19,17 @@ export default function Home() {
   const [selectedScript, setSelectedScript] = useState<{ name: string; path: string } | null>(null);
   const [availableScripts, setAvailableScripts] = useState<AvailableScript[]>([]);
   const [status, setStatus] = useState("");
-  const [currentPhase, setCurrentPhase] = useState<AnalysisPhase>("connecting");
+  const [currentPhase, setCurrentPhase] = useState<AnalysisPhase>("parsing");
   const [progress, setProgress] = useState<AnalysisProgress | null>(null);
   const [locations, setLocations] = useState<LocationRequirement[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [pageCount, setPageCount] = useState<number | null>(null);
   const [totalLocations, setTotalLocations] = useState<number | null>(null);
+  const [dedupeAnimation, setDedupeAnimation] = useState<{ before: number; after: number } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const phaseTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const initialLocationCountRef = useRef<number>(0);
 
   useEffect(() => {
     getAvailableScripts().then(setAvailableScripts).catch(console.error);
@@ -83,13 +85,20 @@ export default function Home() {
     if (!selectedScript) return;
 
     setState("analyzing");
-    setCurrentPhase("connecting");
-    setStatus("Connecting...");
+    setCurrentPhase("parsing");
+    setStatus("Reading screenplay...");
     setProgress(null);
     setLocations([]);
     setError(null);
     setPageCount(null);
     setTotalLocations(null);
+    setDedupeAnimation(null);
+    initialLocationCountRef.current = 0;
+
+    // Clear any pending phase transition
+    if (phaseTimeoutRef.current) {
+      clearTimeout(phaseTimeoutRef.current);
+    }
 
     const cleanup = analyzeScriptWithCallback(
       selectedScript.path,
@@ -99,19 +108,37 @@ export default function Home() {
             const msg = event.data.message;
             setStatus(msg);
 
-            if (msg.includes("Extracting text")) {
-              setCurrentPhase("extracting");
-            } else if (msg.includes("Extracted") && msg.includes("pages")) {
+            if (msg.includes("Extracted") && msg.includes("pages")) {
               setPageCount(event.data.pages || null);
-            } else if (msg.includes("Identifying")) {
-              setCurrentPhase("identifying");
-            } else if (msg.includes("deduplicating") || (msg.includes("Found") && msg.includes("locations"))) {
-              setCurrentPhase("deduplicating");
-              if (event.data.total) setTotalLocations(event.data.total);
-            } else if (msg.includes("Merged to") || msg.includes("unique locations")) {
-              if (event.data.total) setTotalLocations(event.data.total);
+            } else if (msg.includes("Found") && msg.includes("locations") && msg.includes("deduplicating")) {
+              // Found X locations, deduplicating...
+              const initialCount = event.data.total || 0;
+              initialLocationCountRef.current = initialCount;
+              setTotalLocations(initialCount);
+
+              // Start dedupe animation
+              setDedupeAnimation({ before: initialCount, after: initialCount });
+
+              // Delay the phase transition so the checkmark animation completes
+              phaseTimeoutRef.current = setTimeout(() => {
+                setCurrentPhase("deduplicating");
+              }, 800);
+            } else if (msg.includes("Merged to") || (msg.includes("unique locations") && !msg.includes("deduplicating"))) {
+              // Deduplication complete
+              const finalCount = event.data.total || 0;
+              setTotalLocations(finalCount);
+
+              // Animate the merge using the ref for initial count
+              const beforeCount = initialLocationCountRef.current || finalCount;
+              setDedupeAnimation({ before: beforeCount, after: finalCount });
             } else if (msg.includes("Analyzing locations")) {
+              // Clear any pending transition and move to analyzing
+              if (phaseTimeoutRef.current) {
+                clearTimeout(phaseTimeoutRef.current);
+              }
               setCurrentPhase("analyzing");
+              // Clear dedupe animation after a short delay
+              setTimeout(() => setDedupeAnimation(null), 500);
             }
             break;
           }
@@ -122,17 +149,27 @@ export default function Home() {
             setProgress(event.data);
             break;
           case "complete":
+            if (phaseTimeoutRef.current) {
+              clearTimeout(phaseTimeoutRef.current);
+            }
             setCurrentPhase("complete");
+            setDedupeAnimation(null);
             setStatus(`Analyzed ${event.data.total_locations} locations in ${event.data.processing_time_seconds}s`);
             setState("complete");
             break;
           case "error":
+            if (phaseTimeoutRef.current) {
+              clearTimeout(phaseTimeoutRef.current);
+            }
             setError(event.data.error);
             setState("idle");
             break;
         }
       },
       (err: Error) => {
+        if (phaseTimeoutRef.current) {
+          clearTimeout(phaseTimeoutRef.current);
+        }
         setError(err.message);
         setState("idle");
       },
@@ -145,15 +182,20 @@ export default function Home() {
   }
 
   function handleReset() {
+    if (phaseTimeoutRef.current) {
+      clearTimeout(phaseTimeoutRef.current);
+    }
     setSelectedScript(null);
     setStatus("");
-    setCurrentPhase("connecting");
+    setCurrentPhase("parsing");
     setProgress(null);
     setLocations([]);
     setError(null);
     setState("idle");
     setPageCount(null);
     setTotalLocations(null);
+    setDedupeAnimation(null);
+    initialLocationCountRef.current = 0;
   }
 
   const currentStepIndex = ANALYSIS_STEPS.findIndex((s) => s.phase === currentPhase);
@@ -196,18 +238,34 @@ export default function Home() {
               </p>
             </div>
           </div>
-          {(selectedScript || state !== "idle") && (
-            <button
-              onClick={handleReset}
+          <div className="flex items-center gap-2">
+            {(selectedScript || state !== "idle") && (
+              <button
+                onClick={handleReset}
+                className="flex items-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium transition-all hover:bg-[var(--color-bg-muted)]"
+                style={{ color: "var(--color-text-secondary)" }}
+              >
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.5">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 15L3 9m0 0l6-6M3 9h12a6 6 0 010 12h-3" />
+                </svg>
+                New Script
+              </button>
+            )}
+            <a
+              href="/grounding"
               className="flex items-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium transition-all hover:bg-[var(--color-bg-muted)]"
               style={{ color: "var(--color-text-secondary)" }}
             >
-              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.5">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M9 15L3 9m0 0l6-6M3 9h12a6 6 0 010 12h-3" />
-              </svg>
-              New Script
-            </button>
-          )}
+              Location Discovery
+            </a>
+            <a
+              href="/calls"
+              className="flex items-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium transition-all hover:bg-[var(--color-bg-muted)]"
+              style={{ color: "var(--color-text-secondary)" }}
+            >
+              Voice Outreach
+            </a>
+          </div>
         </div>
       </header>
 
@@ -435,7 +493,7 @@ export default function Home() {
                       <div key={step.phase} className="flex flex-1 items-center">
                         <div className="flex flex-col items-center">
                           <div
-                            className={`flex h-8 w-8 items-center justify-center rounded-full text-xs font-semibold transition-all ${isActive ? "ring-4 ring-[var(--color-accent-light)]" : ""}`}
+                            className={`flex h-8 w-8 items-center justify-center rounded-full text-xs font-semibold transition-all ${isActive ? "ring-4 ring-[var(--color-accent-light)]" : ""} ${isComplete ? "animate-checkmark" : ""}`}
                             style={{
                               background: isComplete ? "var(--color-success)" : isActive ? "var(--color-accent)" : "var(--color-bg-muted)",
                               color: isComplete || isActive ? "var(--color-bg-elevated)" : "var(--color-text-subtle)",
@@ -444,6 +502,11 @@ export default function Home() {
                             {isComplete ? (
                               <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
                                 <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                              </svg>
+                            ) : isActive && step.phase === "deduplicating" ? (
+                              /* Special merge icon for dedupe step */
+                              <svg className="h-4 w-4 animate-pulse" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
                               </svg>
                             ) : isActive ? (
                               <div className="h-2 w-2 animate-spin rounded-full border border-current border-t-transparent" />
@@ -494,15 +557,67 @@ export default function Home() {
               )}
             </div>
 
+            {/* Dedupe Animation - shows during merge phase */}
+            {currentPhase === "deduplicating" && dedupeAnimation && (
+              <div className="animate-fade-in">
+                <DedupeAnimation before={dedupeAnimation.before} after={dedupeAnimation.after} />
+              </div>
+            )}
+
             {/* Locations as they stream in */}
             {locations.length > 0 && (
               <div>
                 <div className="mb-5 flex items-center justify-between">
-                  <h2 className="text-lg font-medium" style={{ fontFamily: "var(--font-display)", color: "var(--color-text)" }}>
-                    Locations ({locations.length})
-                  </h2>
+                  <div className="flex items-center gap-3">
+                    <h2 className="text-lg font-medium" style={{ fontFamily: "var(--font-display)", color: "var(--color-text)" }}>
+                      Locations Discovered
+                    </h2>
+                    <div
+                      className="flex items-center gap-2 rounded-full px-3 py-1 animate-pulse"
+                      style={{ background: "var(--color-accent-light)" }}
+                    >
+                      <div className="h-2 w-2 rounded-full animate-ping" style={{ background: "var(--color-accent)" }} />
+                      <span className="text-sm font-bold tabular-nums" style={{ color: "var(--color-accent)" }}>
+                        {locations.length}
+                      </span>
+                    </div>
+                  </div>
+                  <p className="text-xs" style={{ color: "var(--color-text-subtle)" }}>
+                    New locations appear as they&apos;re analyzed
+                  </p>
                 </div>
-                <LocationGrid locations={locations} />
+                <LocationGrid locations={locations} isAnimated />
+              </div>
+            )}
+
+            {/* Waiting for parsing to complete */}
+            {currentPhase === "parsing" && (
+              <div className="flex flex-col items-center justify-center py-16 animate-fade-in">
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="h-3 w-3 rounded-full animate-bounce" style={{ background: "var(--color-accent)", animationDelay: "0ms" }} />
+                  <div className="h-3 w-3 rounded-full animate-bounce" style={{ background: "var(--color-accent)", animationDelay: "150ms" }} />
+                  <div className="h-3 w-3 rounded-full animate-bounce" style={{ background: "var(--color-accent)", animationDelay: "300ms" }} />
+                </div>
+                <p className="text-sm font-medium" style={{ color: "var(--color-text-secondary)" }}>
+                  Reading screenplay and identifying scenes...
+                </p>
+                <p className="text-xs mt-1" style={{ color: "var(--color-text-subtle)" }}>
+                  This usually takes just a moment
+                </p>
+              </div>
+            )}
+
+            {/* Waiting for first location during analyze phase */}
+            {locations.length === 0 && currentPhase === "analyzing" && (
+              <div className="flex flex-col items-center justify-center py-12 animate-pulse">
+                <div className="flex items-center gap-3 mb-3">
+                  <div className="h-3 w-3 rounded-full animate-bounce" style={{ background: "var(--color-accent)", animationDelay: "0ms" }} />
+                  <div className="h-3 w-3 rounded-full animate-bounce" style={{ background: "var(--color-accent)", animationDelay: "150ms" }} />
+                  <div className="h-3 w-3 rounded-full animate-bounce" style={{ background: "var(--color-accent)", animationDelay: "300ms" }} />
+                </div>
+                <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>
+                  Analyzing scenes with AI...
+                </p>
               </div>
             )}
           </div>
@@ -512,24 +627,47 @@ export default function Home() {
         {state === "complete" && (
           <div className="animate-fade-in">
             {/* Summary Header */}
-            <div className="mb-8 flex items-start justify-between">
+            <div className="mb-8 flex flex-col sm:flex-row items-start justify-between gap-4">
               <div>
-                <h2 className="text-2xl font-medium" style={{ fontFamily: "var(--font-display)", color: "var(--color-text)" }}>
-                  {locations.length} Locations
-                </h2>
-                <p className="mt-1 text-sm" style={{ color: "var(--color-text-muted)" }}>
+                <div className="flex items-center gap-3 mb-1">
+                  <h2 className="text-2xl font-medium" style={{ fontFamily: "var(--font-display)", color: "var(--color-text)" }}>
+                    {locations.length} Locations
+                  </h2>
+                  <div
+                    className="flex items-center gap-2 rounded-full px-3 py-1.5"
+                    style={{ background: "var(--color-success-light)" }}
+                  >
+                    <svg className="h-3.5 w-3.5" style={{ color: "var(--color-success)" }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                    </svg>
+                    <span className="text-xs font-semibold" style={{ color: "var(--color-success)" }}>Complete</span>
+                  </div>
+                </div>
+                <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>
                   {selectedScript?.name} &middot; {status}
                 </p>
               </div>
-              <div
-                className="flex items-center gap-2 rounded-full px-3 py-1.5"
-                style={{ background: "var(--color-success-light)" }}
+
+              {/* CTA to Grounding */}
+              <a
+                href="/grounding"
+                className="group flex items-center gap-3 rounded-lg px-5 py-3 transition-all hover:scale-[1.02] active:scale-[0.98]"
+                style={{ background: "var(--color-accent)", color: "white" }}
               >
-                <svg className="h-3.5 w-3.5" style={{ color: "var(--color-success)" }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                <div className="flex h-10 w-10 items-center justify-center rounded-full" style={{ background: "rgba(255,255,255,0.2)" }}>
+                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <circle cx="12" cy="10" r="3" />
+                    <path d="M12 21.7C17.3 17 20 13 20 10a8 8 0 1 0-16 0c0 3 2.7 7 8 11.7z" />
+                  </svg>
+                </div>
+                <div className="text-left">
+                  <span className="block text-sm font-semibold">Find Real Venues</span>
+                  <span className="block text-xs opacity-80">Discover filming locations</span>
+                </div>
+                <svg className="h-5 w-5 ml-2 transition-transform group-hover:translate-x-1" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" />
                 </svg>
-                <span className="text-xs font-semibold" style={{ color: "var(--color-success)" }}>Complete</span>
-              </div>
+              </a>
             </div>
 
             <LocationGrid locations={locations} />
@@ -558,17 +696,209 @@ export default function Home() {
   );
 }
 
-function LocationGrid({ locations }: { locations: LocationRequirement[] }) {
+// Pairs of similar locations that will merge
+const MERGE_PAIRS = [
+  { left: { header: "INT. COFFEE SHOP - DAY", type: "interior" }, right: { header: "INT. CAFÉ - MORNING", type: "interior" }, merged: { header: "INT. COFFEE SHOP / CAFÉ", type: "interior" } },
+  { left: { header: "EXT. CITY STREET - NIGHT", type: "exterior" }, right: { header: "EXT. DOWNTOWN - NIGHT", type: "exterior" }, merged: { header: "EXT. URBAN STREET", type: "exterior" } },
+  { left: { header: "INT. APARTMENT - DAY", type: "interior" }, right: { header: "INT. LIVING ROOM - DAY", type: "interior" }, merged: { header: "INT. APARTMENT", type: "interior" } },
+];
+
+function DedupeAnimation({ before, after }: { before: number; after: number }) {
+  const [currentMergeIndex, setCurrentMergeIndex] = useState(0);
+  const [mergePhase, setMergePhase] = useState<'showing' | 'merging' | 'merged'>('showing');
+  const totalMerged = before - after;
+
+  // Cycle through merge animations
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setMergePhase(prev => {
+        if (prev === 'showing') return 'merging';
+        if (prev === 'merging') return 'merged';
+        // Reset to next pair
+        setCurrentMergeIndex(i => (i + 1) % MERGE_PAIRS.length);
+        return 'showing';
+      });
+    }, 1200); // Change phase every 1.2 seconds
+
+    return () => clearInterval(timer);
+  }, []);
+
+  const currentPair = MERGE_PAIRS[currentMergeIndex];
+
   return (
-    <div className="stagger-children grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-      {locations.map((loc) => (
-        <LocationCard key={loc.scene_id} location={loc} />
+    <div>
+      {/* Header */}
+      <div className="mb-5 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <h2 className="text-lg font-medium" style={{ fontFamily: "var(--font-display)", color: "var(--color-text)" }}>
+            Merging Similar Locations
+          </h2>
+          <div
+            className="flex items-center gap-2 rounded-full px-3 py-1 animate-pulse"
+            style={{ background: "var(--color-accent-light)" }}
+          >
+            <span className="text-sm font-bold tabular-nums" style={{ color: "var(--color-accent)" }}>
+              {before} → {after}
+            </span>
+            {totalMerged > 0 && (
+              <span className="text-xs" style={{ color: "var(--color-accent)" }}>
+                ({totalMerged} to merge)
+              </span>
+            )}
+          </div>
+        </div>
+        <p className="text-xs" style={{ color: "var(--color-text-subtle)" }}>
+          Combining duplicate scene locations
+        </p>
+      </div>
+
+      {/* Merge Animation Area */}
+      <div className="relative flex items-center justify-center gap-4 py-8">
+        {/* Left Card */}
+        <div
+          className="w-64 transition-all duration-500 ease-out"
+          style={{
+            transform: mergePhase === 'merging' ? 'translateX(60px) scale(0.95)' : mergePhase === 'merged' ? 'translateX(120px) scale(0)' : 'translateX(0) scale(1)',
+            opacity: mergePhase === 'merged' ? 0 : 1,
+          }}
+        >
+          <MergeCard location={currentPair.left} status={mergePhase === 'merging' ? 'merging' : 'normal'} />
+        </div>
+
+        {/* Center - Merge indicator or merged result */}
+        <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-10">
+          {mergePhase === 'merged' ? (
+            <div className="w-72 animate-fade-in">
+              <MergeCard location={currentPair.merged} status="result" />
+            </div>
+          ) : (
+            <div
+              className="flex h-12 w-12 items-center justify-center rounded-full transition-all duration-300"
+              style={{
+                background: mergePhase === 'merging' ? 'var(--color-accent)' : 'var(--color-bg-muted)',
+                color: mergePhase === 'merging' ? 'white' : 'var(--color-text-muted)',
+                transform: mergePhase === 'merging' ? 'scale(1.1)' : 'scale(1)',
+              }}
+            >
+              <svg className={`h-6 w-6 ${mergePhase === 'merging' ? 'animate-pulse' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+              </svg>
+            </div>
+          )}
+        </div>
+
+        {/* Right Card */}
+        <div
+          className="w-64 transition-all duration-500 ease-out"
+          style={{
+            transform: mergePhase === 'merging' ? 'translateX(-60px) scale(0.95)' : mergePhase === 'merged' ? 'translateX(-120px) scale(0)' : 'translateX(0) scale(1)',
+            opacity: mergePhase === 'merged' ? 0 : 1,
+          }}
+        >
+          <MergeCard location={currentPair.right} status={mergePhase === 'merging' ? 'merging' : 'normal'} />
+        </div>
+      </div>
+
+      {/* Progress dots */}
+      <div className="flex justify-center gap-2 mt-2">
+        {MERGE_PAIRS.map((_, i) => (
+          <div
+            key={i}
+            className="h-2 w-2 rounded-full transition-all duration-300"
+            style={{
+              background: i === currentMergeIndex ? 'var(--color-accent)' : 'var(--color-border)',
+              transform: i === currentMergeIndex ? 'scale(1.2)' : 'scale(1)',
+            }}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function MergeCard({ location, status }: { location: { header: string; type: string }; status: 'normal' | 'merging' | 'result' }) {
+  return (
+    <div
+      className="paper-card overflow-hidden rounded-lg transition-all duration-300"
+      style={{
+        borderColor: status === 'merging' ? 'var(--color-warning)' : status === 'result' ? 'var(--color-success)' : undefined,
+        boxShadow: status === 'result' ? '0 4px 12px rgba(74, 124, 89, 0.2)' : undefined,
+      }}
+    >
+      {/* Header bar */}
+      <div
+        className="flex items-center justify-between px-3 py-2"
+        style={{
+          background: status === 'merging' ? 'rgba(184, 134, 11, 0.1)' : status === 'result' ? 'var(--color-success-light)' : 'var(--color-bg-muted)',
+          borderBottom: '1px solid var(--color-border-subtle)'
+        }}
+      >
+        <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider">
+          <span style={{ color: location.type === 'interior' ? 'var(--color-interior)' : 'var(--color-exterior)' }}>
+            {location.type === 'interior' ? (
+              <svg className="h-3 w-3 inline" fill="currentColor" viewBox="0 0 20 20">
+                <path d="M10.707 2.293a1 1 0 00-1.414 0l-7 7a1 1 0 001.414 1.414L4 10.414V17a1 1 0 001 1h2a1 1 0 001-1v-2a1 1 0 011-1h2a1 1 0 011 1v2a1 1 0 001 1h2a1 1 0 001-1v-6.586l.293.293a1 1 0 001.414-1.414l-7-7z" />
+              </svg>
+            ) : (
+              <svg className="h-3 w-3 inline" fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M5.05 4.05a7 7 0 119.9 9.9L10 18.9l-4.95-4.95a7 7 0 010-9.9zM10 11a2 2 0 100-4 2 2 0 000 4z" clipRule="evenodd" />
+              </svg>
+            )}
+          </span>
+        </div>
+        {status === 'merging' && (
+          <span className="text-[9px] font-bold px-1.5 py-0.5 rounded" style={{ background: 'var(--color-warning)', color: 'white' }}>
+            MERGING
+          </span>
+        )}
+        {status === 'result' && (
+          <span className="text-[9px] font-bold px-1.5 py-0.5 rounded" style={{ background: 'var(--color-success)', color: 'white' }}>
+            MERGED
+          </span>
+        )}
+      </div>
+
+      {/* Content */}
+      <div className="p-3">
+        <h3 className="scene-header text-xs leading-tight" style={{ color: "var(--color-text)" }}>
+          {location.header}
+        </h3>
+
+        {/* Skeleton lines */}
+        <div className="mt-2 space-y-1.5">
+          <div className="h-1.5 rounded" style={{ background: 'var(--color-bg-muted)', width: '85%' }} />
+          <div className="h-1.5 rounded" style={{ background: 'var(--color-bg-muted)', width: '65%' }} />
+        </div>
+
+        {/* Tag */}
+        <div className="mt-2">
+          <div
+            className="inline-block h-4 w-14 rounded"
+            style={{ background: status === 'result' ? 'var(--color-success-light)' : 'var(--color-accent-light)' }}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function LocationGrid({ locations, isAnimated = false }: { locations: LocationRequirement[]; isAnimated?: boolean }) {
+  return (
+    <div className={`grid gap-4 sm:grid-cols-2 lg:grid-cols-3 ${isAnimated ? "" : "stagger-children"}`}>
+      {locations.map((loc, index) => (
+        <div
+          key={loc.scene_id}
+          className={isAnimated ? "animate-fade-in" : ""}
+          style={isAnimated ? { animationDelay: `${Math.min(index * 50, 500)}ms` } : undefined}
+        >
+          <LocationCard location={loc} isNew={isAnimated && index === locations.length - 1} />
+        </div>
       ))}
     </div>
   );
 }
 
-function LocationCard({ location }: { location: LocationRequirement }) {
+function LocationCard({ location, isNew = false }: { location: LocationRequirement; isNew?: boolean }) {
   const [expanded, setExpanded] = useState(false);
 
   const isInterior = location.constraints.interior_exterior === "interior";
@@ -576,7 +906,9 @@ function LocationCard({ location }: { location: LocationRequirement }) {
   const isBoth = location.constraints.time_of_day === "both";
 
   return (
-    <div className="paper-card overflow-hidden rounded-lg">
+    <div
+      className={`paper-card overflow-hidden rounded-lg transition-all ${isNew ? "location-new" : ""}`}
+    >
       {/* Header bar */}
       <div
         className="flex items-center justify-between px-4 py-2.5"

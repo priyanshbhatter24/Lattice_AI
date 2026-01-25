@@ -62,49 +62,54 @@ Provide a JSON response:
 Respond with valid JSON only."""
 
 
-DEDUP_PASS1_PROMPT = """Analyze these screenplay scene headers to identify duplicates.
+DEDUP_PASS1_PROMPT = """Analyze these screenplay scene headers to identify locations that should be MERGED as the same physical place.
 
 Scene headers:
 {location_list}
 
-Do TWO things:
+MERGE AGGRESSIVELY - these are all the SAME LOCATION and should be merged:
+1. Same place, different times: "INT. COFFEE SHOP - DAY" + "INT. COFFEE SHOP - NIGHT" = same
+2. Same place, INT/EXT variation: "INT. HOUSE" + "EXT. HOUSE" = same location
+3. Shortened names: "MARK'S DORM ROOM" + "MARK'S ROOM" + "DORM ROOM" = same
+4. Word order changes: "CAMERON AND TYLER'S ROOM" + "TYLER AND CAMERON'S ROOM" = same
+5. Suffix dropped: "PORCELLIAN CLUB" + "PORCELLIAN" = same
+6. Minor variations: "THE OFFICE" + "OFFICE" + "MAIN OFFICE" = likely same
+7. Continuous action: "HALLWAY" + "HALLWAY (CONTINUOUS)" = same
+8. Same building areas: "HOSPITAL ROOM" + "HOSPITAL CORRIDOR" + "HOSPITAL" = same building
+9. Possessive variations: "JOHN'S APARTMENT" + "JOHN'S PLACE" + "JOHN'S" = same
 
-1. MERGE headers that CLEARLY refer to the same location based on names:
-   - "MARK'S DORM ROOM" and "MARK'S ROOM" = same (shortened)
-   - "CAMERON AND TYLER'S DORM ROOM" and "TYLER AND CAMERON'S DORM ROOM" = same (name order)
-   - "PORCELLIAN CLUB" and "PORCELLIAN" = same (suffix dropped)
+FLAG for context review (only if appearing multiple times with NO distinguishing details):
+- Truly generic: "BEDROOM", "CAR", "STREET" (could be anyone's)
 
-2. FLAG headers that are generic/ambiguous and MIGHT be the same location but need script context to decide:
-   - Generic names like "BEDROOM", "HALLWAY", "KITCHEN", "OFFICE", "CAR"
-   - Only flag if the same generic name appears multiple times
-
-Return JSON:
+Return JSON with the CANONICAL header (pick the most complete one) as key:
 {{
   "merge": {{
-    "canonical_header": ["header1", "header2"]
+    "INT. COFFEE SHOP - DAY": ["INT. COFFEE SHOP - NIGHT", "INT. COFFEE SHOP"],
+    "INT. MARK'S DORM ROOM": ["INT. MARK'S ROOM", "MARK'S DORM"]
   }},
-  "needs_context": ["INT. BEDROOM", "INT. HALLWAY"]
+  "needs_context": ["INT. BEDROOM", "INT. CAR"]
 }}
 
-Only include headers that have duplicates or need context review. Respond with valid JSON only."""
+Be AGGRESSIVE about merging - when in doubt, merge. Only include headers that have duplicates. Respond with valid JSON only."""
 
 
-DEDUP_PASS2_PROMPT = """These screenplay locations have generic names. Look at the script context to determine if they're the SAME or DIFFERENT physical locations.
+DEDUP_PASS2_PROMPT = """These screenplay locations have generic names. Decide if they're the SAME or DIFFERENT physical locations.
 
 {location_contexts}
 
-For each location name, decide based on:
-- Characters present (same characters = likely same place)
-- Setting details mentioned
-- Story continuity
+LEAN TOWARD "same" - merge unless clearly different:
+- Same or overlapping characters = SAME place
+- Similar setting/vibe = SAME place
+- Could reasonably be shot at one location = SAME place
+- Only say "different" if they MUST be different locations (e.g., one is a mansion, one is a shack)
 
-Return JSON with your decision for each:
+Return JSON:
 {{
   "INT. BEDROOM": "same",
-  "INT. HALLWAY": "different"
+  "INT. HALLWAY": "same"
 }}
 
-Respond with valid JSON only."""
+When in doubt, say "same" - it's better to scout one location than two similar ones. Respond with valid JSON only."""
 
 
 def _normalize_vibe(value: str | None) -> VibeCategory | None:
@@ -321,6 +326,71 @@ async def process_locations_streaming(
     await asyncio.gather(*tasks, return_exceptions=True)
 
 
+def _normalize_header_for_matching(header: str) -> str:
+    """
+    Normalize a scene header for matching purposes.
+    Strips INT/EXT prefix, time of day suffix, and normalizes whitespace.
+    """
+    h = header.upper().strip()
+
+    # Remove INT./EXT./INT/EXT prefix
+    h = re.sub(r'^(INT\.|EXT\.|INT|EXT)[\s/]*', '', h)
+
+    # Remove time of day suffixes
+    h = re.sub(r'\s*[-–]\s*(DAY|NIGHT|MORNING|EVENING|DAWN|DUSK|SUNSET|SUNRISE|LATER|CONTINUOUS|SAME|MOMENTS LATER)(\s|$)', '', h)
+
+    # Remove parenthetical notes
+    h = re.sub(r'\s*\([^)]*\)\s*', ' ', h)
+
+    # Normalize whitespace and punctuation
+    h = re.sub(r'[\s\-–]+', ' ', h).strip()
+    h = re.sub(r"['\"]", '', h)  # Remove quotes/apostrophes for matching
+
+    return h
+
+
+def _pre_merge_obvious_duplicates(locations: list[UniqueLocation]) -> tuple[list[UniqueLocation], int]:
+    """
+    Pre-merge obvious duplicates before LLM processing.
+    Returns (merged_locations, merge_count).
+    """
+    # Group by normalized header
+    groups: dict[str, list[UniqueLocation]] = {}
+
+    for loc in locations:
+        normalized = _normalize_header_for_matching(loc.scene_header)
+        if normalized not in groups:
+            groups[normalized] = []
+        groups[normalized].append(loc)
+
+    # Merge each group
+    merged_locations = []
+    total_merged = 0
+
+    for normalized, locs in groups.items():
+        if len(locs) == 1:
+            merged_locations.append(locs[0])
+        else:
+            # Pick the most complete header as canonical (longest one)
+            locs.sort(key=lambda x: len(x.scene_header), reverse=True)
+            canonical = locs[0]
+
+            # Merge all others into canonical
+            for other in locs[1:]:
+                canonical.occurrences.extend(other.occurrences)
+                canonical.page_numbers = sorted(set(canonical.page_numbers + other.page_numbers))
+                if canonical.interior_exterior != other.interior_exterior:
+                    canonical.interior_exterior = "both"
+                if canonical.time_of_day != other.time_of_day:
+                    canonical.time_of_day = "both"
+
+            merged_locations.append(canonical)
+            total_merged += len(locs) - 1
+
+    merged_locations.sort(key=lambda loc: loc.page_numbers[0] if loc.page_numbers else 0)
+    return merged_locations, total_merged
+
+
 def _merge_locations(
     locations: list[UniqueLocation],
     header_to_canonical: dict[str, str],
@@ -337,6 +407,8 @@ def _merge_locations(
             existing.page_numbers = sorted(set(existing.page_numbers + loc.page_numbers))
             if existing.time_of_day != loc.time_of_day and loc.time_of_day != "both":
                 existing.time_of_day = "both"
+            if existing.interior_exterior != loc.interior_exterior:
+                existing.interior_exterior = "both"
         else:
             merged[canonical] = UniqueLocation(
                 scene_header=canonical,
@@ -355,12 +427,18 @@ async def deduplicate_locations_with_llm(
     locations: list[UniqueLocation],
 ) -> list[UniqueLocation]:
     """
-    Two-pass deduplication:
-    1. Name-based: merge obvious duplicates, flag ambiguous ones
+    Three-pass deduplication:
+    0. Pre-merge: Automatically merge obvious duplicates (same location, different INT/EXT or time of day)
+    1. Name-based: merge similar names with LLM assistance, flag ambiguous ones
     2. Context-based: for flagged locations, look at script context to decide
     """
     if not locations:
         return locations
+
+    # === PASS 0: Pre-merge obvious duplicates ===
+    locations, pre_merged = _pre_merge_obvious_duplicates(locations)
+    if pre_merged > 0:
+        logger.info("Pre-merge complete", merged=pre_merged, remaining=len(locations))
 
     headers = [loc.scene_header for loc in locations]
     location_list = "\n".join(f"- {h}" for h in headers)
