@@ -17,14 +17,19 @@ from pydantic_settings import BaseSettings
 class GroundingConfig(BaseSettings):
     """Configuration for the grounding agent."""
 
-    # Google Cloud / Vertex AI settings
+    # Google Cloud / Vertex AI settings (for Google Maps grounding)
     google_cloud_project: str
     google_cloud_location: str = "global"
     google_application_credentials: str = ""  # Optional: path to service account JSON
 
-    # Model settings
+    # Gemini model settings (for grounding)
     model_name: str = "gemini-3-flash-preview"
     api_version: str = "v1"
+
+    # Perplexity settings (for visual verification)
+    perplexity_api_key: str = ""
+    perplexity_model: str = "sonar-pro"
+    perplexity_base_url: str = "https://api.perplexity.ai"
 
     # Default search settings
     default_city: str = "Los Angeles, CA"

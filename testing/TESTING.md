@@ -33,10 +33,14 @@ gcloud auth application-default login
 ### 3. Environment Variables
 
 ```bash
+# Required for Google Maps grounding
 export GOOGLE_CLOUD_PROJECT=your-project-id
-export GOOGLE_CLOUD_LOCATION=global
-export GOOGLE_GENAI_USE_VERTEXAI=True
+
+# Required for visual verification
+export PERPLEXITY_API_KEY=pplx-your-api-key
 ```
+
+Get your Perplexity API key from: https://www.perplexity.ai/settings/api
 
 ### 4. Install Dependencies
 
@@ -204,7 +208,7 @@ Time: 3.45s
 
 ## Visual Verification
 
-Stage 2 includes visual verification using Gemini 3 Flash vision. For each location with photos:
+Stage 2 includes visual verification using **Perplexity Sonar Pro** vision. For each location with photos:
 
 1. Fetches the location photo from Google Places
 2. Analyzes the image against the required vibe (e.g., "industrial", "gritty")

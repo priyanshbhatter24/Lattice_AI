@@ -21,7 +21,6 @@ from google.genai.types import (
     GenerateContentConfig,
     GoogleMaps,
     HttpOptions,
-    Part,
     Tool,
 )
 
@@ -428,7 +427,7 @@ Return ONLY the JSON array, no other text."""
 
         return results
 
-    # ─── Visual Verification Methods ──────────────────────────────────
+    # ─── Visual Verification Methods (using Perplexity Sonar) ─────────
 
     def _build_visual_verification_prompt(self, vibe: Vibe) -> str:
         """Build prompt for visual vibe verification."""
@@ -455,15 +454,68 @@ Rules for scoring:
 - 0.3-0.49: Poor match, major concerns
 - 0.0-0.29: Does not match the required vibe"""
 
-    async def _fetch_image_bytes(self, image_url: str) -> bytes | None:
-        """Fetch image bytes from URL."""
+    async def _fetch_image_as_base64(self, image_url: str) -> tuple[str, str] | None:
+        """Fetch image and convert to base64 data URI."""
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.get(image_url, timeout=10.0)
                 response.raise_for_status()
-                return response.content
+
+                # Determine mime type
+                content_type = response.headers.get("content-type", "image/jpeg")
+                if "png" in content_type:
+                    mime_type = "image/png"
+                elif "webp" in content_type:
+                    mime_type = "image/webp"
+                elif "gif" in content_type:
+                    mime_type = "image/gif"
+                else:
+                    mime_type = "image/jpeg"
+
+                import base64
+                encoded = base64.b64encode(response.content).decode("utf-8")
+                data_uri = f"data:{mime_type};base64,{encoded}"
+
+                return data_uri, mime_type
+
         except Exception as e:
             logger.warning("Failed to fetch image", url=image_url, error=str(e))
+            return None
+
+    async def _call_perplexity_vision(self, image_data_uri: str, prompt: str) -> str | None:
+        """Call Perplexity Sonar API with an image for vision analysis."""
+        if not self.config.perplexity_api_key:
+            logger.warning("Perplexity API key not configured, skipping visual verification")
+            return None
+
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    f"{self.config.perplexity_base_url}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {self.config.perplexity_api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": self.config.perplexity_model,
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": [
+                                    {"type": "text", "text": prompt},
+                                    {"type": "image_url", "image_url": {"url": image_data_uri}},
+                                ],
+                            }
+                        ],
+                    },
+                    timeout=30.0,
+                )
+                response.raise_for_status()
+                data = response.json()
+                return data["choices"][0]["message"]["content"]
+
+        except Exception as e:
+            logger.error("Perplexity API call failed", error=str(e))
             return None
 
     async def verify_visual_vibe(
@@ -473,7 +525,7 @@ Rules for scoring:
         image_url: str | None = None,
     ) -> LocationCandidate:
         """
-        Verify a location's visual vibe using Gemini 3 Flash vision.
+        Verify a location's visual vibe using Perplexity Sonar vision.
 
         Analyzes the location photo against the required vibe and updates
         the candidate with visual verification results.
@@ -485,26 +537,22 @@ Rules for scoring:
             logger.warning("No photo available for visual verification", venue=candidate.venue_name)
             return candidate
 
-        # Fetch the image
-        image_bytes = await self._fetch_image_bytes(photo_url)
-        if not image_bytes:
+        # Fetch and encode the image
+        result = await self._fetch_image_as_base64(photo_url)
+        if not result:
             return candidate
+
+        image_data_uri, _ = result
 
         try:
             # Build the prompt
             prompt = self._build_visual_verification_prompt(vibe)
 
-            # Call Gemini with the image
-            response = self.client.models.generate_content(
-                model=self.config.model_name,
-                contents=[
-                    Part.from_bytes(data=image_bytes, mime_type="image/jpeg"),
-                    prompt,
-                ],
-            )
+            # Call Perplexity Sonar with the image
+            response_text = await self._call_perplexity_vision(image_data_uri, prompt)
 
-            # Parse response
-            response_text = response.text.strip()
+            if not response_text:
+                return candidate
 
             # Extract JSON from response
             json_match = re.search(r'\{[\s\S]*\}', response_text)

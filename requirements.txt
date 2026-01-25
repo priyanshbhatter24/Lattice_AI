@@ -12,8 +12,9 @@ pydantic-settings>=2.6.0
 supabase>=2.10.0
 
 # ─── AI / LLM ─────────────────────────────────────────────
-# Stage 2: Google GenAI with Google Maps grounding
+# Stage 2: Google GenAI with Google Maps grounding (Gemini 3 Flash)
 google-genai>=1.0.0
+# Stage 2: Visual verification uses Perplexity Sonar Pro (via httpx, no SDK needed)
 
 # ─── Web / HTTP ───────────────────────────────────────────
 httpx>=0.28.0
