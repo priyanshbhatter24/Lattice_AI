@@ -3,6 +3,7 @@ API routes for Stage 2: Location Grounding.
 
 Provides endpoints for finding real-world locations that match script requirements.
 Uses SSE streaming for real-time progress updates.
+All endpoints require authentication.
 """
 
 import asyncio
@@ -10,10 +11,11 @@ import json
 from typing import Any
 
 import structlog
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from app.api.middleware.auth import AuthenticatedUser, get_current_user
 from app.db.repository import (
     LocationCandidateRepository,
     ProjectRepository,
@@ -71,14 +73,23 @@ class GroundingProgress(BaseModel):
 
 
 @router.get("/scenes/{project_id}")
-async def get_groundable_scenes(project_id: str) -> list[dict[str, Any]]:
+async def get_groundable_scenes(
+    project_id: str,
+    auth: AuthenticatedUser = Depends(get_current_user),
+) -> list[dict[str, Any]]:
     """
     Get all scenes for a project that can be grounded.
 
     Returns scenes with their current grounding status.
     """
-    scene_repo = SceneRepository()
-    candidate_repo = LocationCandidateRepository()
+    project_repo = ProjectRepository(access_token=auth.access_token)
+    scene_repo = SceneRepository(access_token=auth.access_token)
+    candidate_repo = LocationCandidateRepository(access_token=auth.access_token)
+
+    # Verify project ownership
+    project = project_repo.get(project_id)
+    if not project or project.get("user_id") != auth.user_id:
+        raise HTTPException(status_code=404, detail="Project not found")
 
     scenes = scene_repo.list_by_project(project_id)
 
@@ -96,7 +107,10 @@ async def get_groundable_scenes(project_id: str) -> list[dict[str, Any]]:
 
 
 @router.post("/ground")
-async def ground_scenes_stream(request: GroundScenesRequest):
+async def ground_scenes_stream(
+    request: GroundScenesRequest,
+    auth: AuthenticatedUser = Depends(get_current_user),
+):
     """
     Ground multiple scenes with SSE streaming progress.
 
@@ -111,10 +125,29 @@ async def ground_scenes_stream(request: GroundScenesRequest):
     - complete: All scenes processed
     - error: Error occurred
     """
+    # Verify all scenes belong to projects owned by the user
+    scene_repo = SceneRepository(access_token=auth.access_token)
+    project_repo = ProjectRepository(access_token=auth.access_token)
+    verified_projects: set[str] = set()
+
+    for scene_id in request.scene_ids:
+        scene = scene_repo.get(scene_id)
+        if not scene:
+            raise HTTPException(status_code=404, detail=f"Scene {scene_id} not found")
+
+        project_id = scene["project_id"]
+        if project_id not in verified_projects:
+            project = project_repo.get(project_id)
+            if not project or project.get("user_id") != auth.user_id:
+                raise HTTPException(status_code=404, detail=f"Scene {scene_id} not found")
+            verified_projects.add(project_id)
+
+    # Capture access_token for use in the generator
+    access_token = auth.access_token
 
     async def event_stream():
-        scene_repo = SceneRepository()
-        candidate_repo = LocationCandidateRepository()
+        scene_repo = SceneRepository(access_token=access_token)
+        candidate_repo = LocationCandidateRepository(access_token=access_token)
 
         total_scenes = len(request.scene_ids)
         num_workers = min(request.parallel_workers, total_scenes, 10)  # Cap at 10 workers
@@ -263,18 +296,27 @@ async def ground_scenes_stream(request: GroundScenesRequest):
 
 
 @router.post("/ground-single")
-async def ground_single_scene(request: GroundSceneRequest) -> dict[str, Any]:
+async def ground_single_scene(
+    request: GroundSceneRequest,
+    auth: AuthenticatedUser = Depends(get_current_user),
+) -> dict[str, Any]:
     """
     Ground a single scene (non-streaming).
 
     Returns all candidates found.
     """
-    scene_repo = SceneRepository()
-    candidate_repo = LocationCandidateRepository()
+    scene_repo = SceneRepository(access_token=auth.access_token)
+    project_repo = ProjectRepository(access_token=auth.access_token)
+    candidate_repo = LocationCandidateRepository(access_token=auth.access_token)
     agent = GroundingAgent()
 
     scene = scene_repo.get(request.scene_id)
     if not scene:
+        raise HTTPException(status_code=404, detail="Scene not found")
+
+    # Verify project ownership
+    project = project_repo.get(scene["project_id"])
+    if not project or project.get("user_id") != auth.user_id:
         raise HTTPException(status_code=404, detail="Scene not found")
 
     requirement = _scene_to_requirement(scene, request.target_city, request.max_results)

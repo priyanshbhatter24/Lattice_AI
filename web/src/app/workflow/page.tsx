@@ -439,6 +439,13 @@ export default function Home() {
             >
               Voice Outreach
             </a>
+            <a
+              href="/projects"
+              className="flex items-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium transition-all hover:bg-[var(--color-bg-muted)]"
+              style={{ color: "var(--color-text-secondary)" }}
+            >
+              My Projects
+            </a>
           </div>
         </div>
       </header>
