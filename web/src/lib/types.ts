@@ -341,6 +341,7 @@ export interface GroundableScene {
 // Grounding SSE event types
 export type GroundingSSEEventType =
   | "status"
+  | "thinking"
   | "scene_start"
   | "candidate"
   | "rejected"
@@ -351,6 +352,14 @@ export type GroundingSSEEventType =
 
 export interface GroundingStatusEvent {
   message: string;
+}
+
+export interface GroundingThinkingEvent {
+  scene_id: string;
+  action: "searching" | "found" | "vision" | "evaluating";
+  message: string;
+  detail?: string;
+  venue_name?: string;
 }
 
 export interface GroundingSceneStartEvent {
@@ -401,6 +410,7 @@ export interface GroundingErrorEvent {
 
 export type GroundingSSEEvent =
   | { type: "status"; data: GroundingStatusEvent }
+  | { type: "thinking"; data: GroundingThinkingEvent }
   | { type: "scene_start"; data: GroundingSceneStartEvent }
   | { type: "candidate"; data: GroundingCandidateEvent }
   | { type: "rejected"; data: GroundingRejectedEvent }

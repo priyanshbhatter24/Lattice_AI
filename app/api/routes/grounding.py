@@ -56,7 +56,7 @@ class GroundScenesRequest(BaseModel):
     save_to_db: bool = True
     parallel_workers: int = 5  # Number of parallel workers
     verify_visuals: bool = True  # Enable visual vibe verification
-    min_score_threshold: float = 0.4  # Minimum match score to accept candidate
+    min_score_threshold: float = 0.55  # Minimum match score to accept candidate (raised from 0.4)
 
 
 class GroundingProgress(BaseModel):
@@ -203,10 +203,19 @@ async def ground_scenes_stream(
 
                     # Build requirement and run grounding
                     requirement = _scene_to_requirement(scene, request.target_city, request.max_results)
+
+                    # Create status callback to stream thinking events
+                    async def status_callback(event_type: str, data: dict):
+                        await result_queue.put((event_type, {
+                            "scene_id": scene_id,
+                            **data,
+                        }))
+
                     result = await agent.find_and_verify_locations(
                         requirement,
                         verify_visuals=request.verify_visuals,
                         save_to_db=False,
+                        status_callback=status_callback,
                     )
 
                     # Filter and send candidates - reject low-scoring ones

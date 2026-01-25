@@ -60,6 +60,17 @@ export default function Home() {
   const [savedProjectId, setSavedProjectId] = useState<string | null>(null);
   const [savedSceneIds, setSavedSceneIds] = useState<string[]>([]);
 
+  // Agentic thinking log
+  interface ThinkingEntry {
+    id: string;
+    action: string;
+    message: string;
+    detail?: string;
+    timestamp: number;
+  }
+  const [thinkingLog, setThinkingLog] = useState<ThinkingEntry[]>([]);
+  const [currentThinking, setCurrentThinking] = useState<string | null>(null);
+
   useEffect(() => {
     getAvailableScripts().then(setAvailableScripts).catch(console.error);
   }, []);
@@ -116,6 +127,8 @@ export default function Home() {
     setConsideringVenue(null);
     setIsRejecting(false);
     setRejectingReasons([]);
+    setThinkingLog([]);
+    setCurrentThinking(null);
     setGroundingProgress({ processed: 0, total: selectedLocations.length, percent: 0 });
 
     try {
@@ -172,6 +185,25 @@ export default function Home() {
           switch (event.type) {
             case "scene_start":
               setCurrentGroundingScene(event.data.scene_header);
+              // Add to thinking log
+              setThinkingLog(prev => [{
+                id: `scene-${event.data.scene_id}-${Date.now()}`,
+                action: "scene",
+                message: `Processing scene: ${event.data.scene_header}`,
+                timestamp: Date.now(),
+              }, ...prev].slice(0, 20)); // Keep last 20 entries
+              break;
+            case "thinking":
+              // Update current thinking action
+              setCurrentThinking(event.data.message);
+              // Add to thinking log
+              setThinkingLog(prev => [{
+                id: `think-${Date.now()}`,
+                action: event.data.action,
+                message: event.data.message,
+                detail: event.data.detail,
+                timestamp: Date.now(),
+              }, ...prev].slice(0, 20));
               break;
             case "candidate":
               // Log photo info for debugging
@@ -1126,17 +1158,84 @@ export default function Home() {
               </>
             )}
 
-            {/* Empty state when no venues yet */}
-            {allVenues.length === 0 && rejectedVenues.length === 0 && (
-              <div className="flex flex-col items-center justify-center py-12">
-                <div className="flex items-center gap-2 mb-3">
-                  <div className="h-3 w-3 rounded-full animate-bounce" style={{ background: "var(--color-accent)" }} />
-                  <div className="h-3 w-3 rounded-full animate-bounce" style={{ background: "var(--color-accent)", animationDelay: "150ms" }} />
-                  <div className="h-3 w-3 rounded-full animate-bounce" style={{ background: "var(--color-accent)", animationDelay: "300ms" }} />
+            {/* Agentic Thinking Panel - shows what the AI is doing */}
+            {(allVenues.length === 0 || thinkingLog.length > 0) && (
+              <div
+                className="paper-card mb-6 overflow-hidden"
+                style={{ borderColor: "var(--color-border)", background: "var(--color-bg-elevated)" }}
+              >
+                {/* Header */}
+                <div
+                  className="px-4 py-3 flex items-center gap-3"
+                  style={{ background: "var(--color-bg-muted)", borderBottom: "1px solid var(--color-border-subtle)" }}
+                >
+                  <div className="relative">
+                    <div
+                      className="h-8 w-8 rounded-full flex items-center justify-center"
+                      style={{ background: "var(--color-accent)" }}
+                    >
+                      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="white" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23.693L5 14.5m14.8.8l1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0112 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5" />
+                      </svg>
+                    </div>
+                    <div
+                      className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full animate-pulse"
+                      style={{ background: "var(--color-success)", border: "2px solid var(--color-bg-elevated)" }}
+                    />
+                  </div>
+                  <div className="flex-1">
+                    <h3 className="text-sm font-semibold" style={{ color: "var(--color-text)" }}>
+                      AI Scout Agent
+                    </h3>
+                    <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>
+                      {currentThinking || "Initializing search..."}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <div className="h-1.5 w-1.5 rounded-full animate-bounce" style={{ background: "var(--color-accent)" }} />
+                    <div className="h-1.5 w-1.5 rounded-full animate-bounce" style={{ background: "var(--color-accent)", animationDelay: "150ms" }} />
+                    <div className="h-1.5 w-1.5 rounded-full animate-bounce" style={{ background: "var(--color-accent)", animationDelay: "300ms" }} />
+                  </div>
                 </div>
-                <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>
-                  Searching for matching venues...
-                </p>
+
+                {/* Thinking Log */}
+                <div className="p-4 max-h-48 overflow-y-auto" style={{ fontFamily: "var(--font-mono)" }}>
+                  {thinkingLog.length === 0 ? (
+                    <div className="flex items-center gap-2 text-xs" style={{ color: "var(--color-text-muted)" }}>
+                      <div className="h-4 w-4 rounded-full border-2 animate-spin" style={{ borderColor: "var(--color-accent)", borderTopColor: "transparent" }} />
+                      <span>Starting location search...</span>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {thinkingLog.slice(0, 8).map((entry, index) => (
+                        <div
+                          key={entry.id}
+                          className={`flex items-start gap-2 text-xs ${index === 0 ? "animate-fade-in" : ""}`}
+                          style={{
+                            color: index === 0 ? "var(--color-text)" : "var(--color-text-muted)",
+                            opacity: index === 0 ? 1 : Math.max(0.3, 1 - index * 0.15),
+                          }}
+                        >
+                          <span style={{ color: "var(--color-accent)" }}>
+                            {entry.action === "searching" && "🔍"}
+                            {entry.action === "found" && "📍"}
+                            {entry.action === "vision" && "👁️"}
+                            {entry.action === "evaluating" && "⚖️"}
+                            {entry.action === "scene" && "🎬"}
+                          </span>
+                          <div className="flex-1 min-w-0">
+                            <span>{entry.message}</span>
+                            {entry.detail && (
+                              <span className="block truncate" style={{ color: "var(--color-text-subtle)", fontSize: "10px" }}>
+                                {entry.detail}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
             )}
 

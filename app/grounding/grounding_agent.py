@@ -639,23 +639,36 @@ Return ONLY the JSON array, no other text."""
         self,
         vibe: Vibe,
         interior_exterior: str = "interior",
+        scene_header: str = "",
+        special_requirements: list[str] = None,
     ) -> str:
         """Build prompt for visual vibe verification."""
         location_type = {
-            "interior": "This should be an INTERIOR shot showing indoor spaces.",
-            "exterior": "This should be an EXTERIOR shot showing the outside/facade.",
+            "interior": "This MUST be an INTERIOR shot showing indoor spaces. Exterior/building shots should score LOW.",
+            "exterior": "This MUST be an EXTERIOR shot showing the outside/facade. Interior shots should score LOW.",
             "both": "This can be either interior or exterior.",
         }.get(interior_exterior, "")
 
-        return f"""Analyze this location photo for film production scouting.
+        special_reqs = ""
+        if special_requirements:
+            special_reqs = f"\n**Special Requirements:** {', '.join(special_requirements)}"
 
+        return f"""You are a professional film location scout evaluating venue photos.
+
+**Scene:** {scene_header}
 **Required Vibe:** {vibe.primary.value}
 **Descriptors:** {', '.join(vibe.descriptors)}
 {f"**Secondary Vibe:** {vibe.secondary.value}" if vibe.secondary else ""}
 **Location Type Required:** {interior_exterior.upper()}
-{location_type}
+{location_type}{special_reqs}
 
-Evaluate how well this location matches the required aesthetic for filming.
+BE STRICT in your evaluation. This is for a professional film production.
+
+Critical evaluation criteria:
+1. Does this photo show the CORRECT type (interior vs exterior)?
+2. Does the aesthetic/vibe ACTUALLY match what's needed?
+3. Are there visible issues that would require expensive fixes (modern fixtures, branding, wrong period)?
+4. Would a location scout recommend this venue to the director?
 
 IMPORTANT considerations:
 1. Does this photo show an INTERIOR or EXTERIOR view?
@@ -748,6 +761,8 @@ Rules for scoring:
         vibe: Vibe,
         image_url: str | None = None,
         interior_exterior: str = "interior",
+        scene_header: str = "",
+        special_requirements: list[str] = None,
     ) -> LocationCandidate:
         """
         Verify a location's visual vibe using Perplexity Sonar vision.
@@ -760,6 +775,8 @@ Rules for scoring:
             vibe: Required vibe for the scene
             image_url: Optional specific image URL to analyze
             interior_exterior: "interior", "exterior", or "both"
+            scene_header: The scene header for context
+            special_requirements: List of special requirements from the scene
         """
         # Use provided URL or first photo from candidate
         photo_url = image_url or (candidate.photo_urls[0] if candidate.photo_urls else None)
@@ -776,8 +793,10 @@ Rules for scoring:
         image_data_uri, _ = result
 
         try:
-            # Build the prompt with interior/exterior context
-            prompt = self._build_visual_verification_prompt(vibe, interior_exterior)
+            # Build the prompt with full context
+            prompt = self._build_visual_verification_prompt(
+                vibe, interior_exterior, scene_header, special_requirements
+            )
 
             # Call Perplexity Sonar with the image
             response_text = await self._call_perplexity_vision(image_data_uri, prompt)
@@ -825,6 +844,9 @@ Rules for scoring:
         candidates: list[LocationCandidate],
         vibe: Vibe,
         interior_exterior: str = "interior",
+        status_callback: callable = None,
+        scene_header: str = "",
+        special_requirements: list[str] = None,
     ) -> list[LocationCandidate]:
         """
         Verify multiple candidates' visual vibes.
@@ -835,12 +857,31 @@ Rules for scoring:
             candidates: List of candidates to verify
             vibe: Required vibe for the scene
             interior_exterior: "interior", "exterior", or "both"
+            status_callback: Optional async callback for status updates
+            scene_header: The scene header for context
+            special_requirements: List of special requirements from the scene
         """
         verified = []
 
-        for candidate in candidates:
+        for i, candidate in enumerate(candidates):
+            # Emit status for each venue being analyzed
+            if status_callback:
+                try:
+                    await status_callback("thinking", {
+                        "action": "evaluating",
+                        "message": f"Evaluating {candidate.venue_name}...",
+                        "detail": f"Venue {i + 1} of {len(candidates)} - checking visual match",
+                        "venue_name": candidate.venue_name,
+                    })
+                except Exception:
+                    pass
+
             verified_candidate = await self.verify_visual_vibe(
-                candidate, vibe, interior_exterior=interior_exterior
+                candidate,
+                vibe,
+                interior_exterior=interior_exterior,
+                scene_header=scene_header,
+                special_requirements=special_requirements,
             )
             verified.append(verified_candidate)
 
@@ -854,6 +895,7 @@ Rules for scoring:
         requirement: LocationRequirement,
         verify_visuals: bool = True,
         save_to_db: bool = False,
+        status_callback: callable = None,
     ) -> GroundingResult:
         """
         Find locations and optionally verify their visual vibe.
@@ -864,9 +906,33 @@ Rules for scoring:
             requirement: The location requirement to search for
             verify_visuals: Whether to run visual vibe verification
             save_to_db: Whether to save results to Supabase
+            status_callback: Optional async callback for status updates: async fn(event_type, data)
         """
+        async def emit_status(event_type: str, data: dict):
+            """Emit a status update if callback provided."""
+            if status_callback:
+                try:
+                    await status_callback(event_type, data)
+                except Exception as e:
+                    logger.warning("Status callback failed", error=str(e))
+
+        # Emit: Searching Google Maps
+        await emit_status("thinking", {
+            "action": "searching",
+            "message": f"Searching Google Maps for '{requirement.scene_header}'...",
+            "detail": f"Query: {self.build_search_query(requirement)}",
+        })
+
         # First, find locations via Google Maps grounding
         result = await self.find_locations(requirement)
+
+        # Emit: Found potential venues
+        if result.candidates:
+            await emit_status("thinking", {
+                "action": "found",
+                "message": f"Found {len(result.candidates)} potential venues",
+                "detail": ", ".join([c.venue_name for c in result.candidates[:3]]) + ("..." if len(result.candidates) > 3 else ""),
+            })
 
         # Then verify visuals if enabled and we have candidates with photos
         if verify_visuals and result.candidates:
@@ -880,10 +946,20 @@ Rules for scoring:
                     interior_exterior=requirement.constraints.interior_exterior,
                 )
 
+                # Emit: Starting vision analysis
+                await emit_status("thinking", {
+                    "action": "vision",
+                    "message": f"Analyzing {len(candidates_with_photos)} venue photos with AI vision...",
+                    "detail": f"Looking for: {requirement.vibe.primary.value} vibe, {requirement.constraints.interior_exterior}",
+                })
+
                 result.candidates = await self.verify_candidates_visual(
                     result.candidates,
                     requirement.vibe,
                     interior_exterior=requirement.constraints.interior_exterior,
+                    status_callback=status_callback,
+                    scene_header=requirement.scene_header,
+                    special_requirements=requirement.constraints.special_requirements,
                 )
 
                 # Update warnings
