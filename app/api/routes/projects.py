@@ -185,7 +185,11 @@ class BulkSaveLocationRequest(BaseModel):
 
 # Use a distinct path pattern to avoid routing conflicts with /{project_id}/scenes
 @router.post("/{project_id}/bulk-scenes")
-async def bulk_save_scenes(project_id: str, request: BulkSaveLocationRequest) -> dict[str, Any]:
+async def bulk_save_scenes(
+    project_id: str,
+    request: BulkSaveLocationRequest,
+    auth: AuthenticatedUser = Depends(get_current_user),
+) -> dict[str, Any]:
     """
     Bulk save analyzed locations (from Stage 1) as scenes to a project.
 
@@ -197,8 +201,8 @@ async def bulk_save_scenes(project_id: str, request: BulkSaveLocationRequest) ->
     from app.models.location import Constraints, LocationRequirement, Vibe
     from app.grounding.models import VibeCategory
 
-    project_repo = ProjectRepository()
-    scene_repo = SceneRepository()
+    project_repo = ProjectRepository(access_token=auth.access_token)
+    scene_repo = SceneRepository(access_token=auth.access_token)
 
     project = project_repo.get(project_id)
     if not project:
