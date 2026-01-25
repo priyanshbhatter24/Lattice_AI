@@ -40,3 +40,5 @@ python-dotenv>=1.0.0
 # ─── Dev Dependencies ─────────────────────────────────────
 # Install with: pip install -r requirements.txt -r requirements-dev.txt
 # Or use: pip install -e ".[dev]"
+
+openai>=2.15.0
