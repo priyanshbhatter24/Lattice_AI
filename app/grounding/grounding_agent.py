@@ -863,14 +863,25 @@ Rules for scoring:
         """
         verified = []
 
+        # Agentic evaluation phrases
+        eval_phrases = [
+            "Taking a closer look at",
+            "Considering",
+            "What about",
+            "Checking out",
+            "Examining",
+            "Let me evaluate",
+        ]
+
         for i, candidate in enumerate(candidates):
-            # Emit status for each venue being analyzed
+            # Emit status for each venue being analyzed with varied language
             if status_callback:
                 try:
+                    phrase = eval_phrases[i % len(eval_phrases)]
                     await status_callback("thinking", {
                         "action": "evaluating",
-                        "message": f"Evaluating {candidate.venue_name}...",
-                        "detail": f"Venue {i + 1} of {len(candidates)} - checking visual match",
+                        "message": f"{phrase} {candidate.venue_name}...",
+                        "detail": f"Does this match the {vibe.primary.value} vibe we need?",
                         "venue_name": candidate.venue_name,
                     })
                 except Exception:
@@ -916,22 +927,32 @@ Rules for scoring:
                 except Exception as e:
                     logger.warning("Status callback failed", error=str(e))
 
-        # Emit: Searching Google Maps
+        # Build search query for display
+        search_query = self.build_search_query(requirement)
+
+        # Emit: Starting search with agentic personality
         await emit_status("thinking", {
             "action": "searching",
-            "message": f"Searching Google Maps for '{requirement.scene_header}'...",
-            "detail": f"Query: {self.build_search_query(requirement)}",
+            "message": f"Looking for venues that match \"{requirement.scene_header}\"",
+            "detail": f"Searching for: {search_query}",
         })
 
         # First, find locations via Google Maps grounding
         result = await self.find_locations(requirement)
 
-        # Emit: Found potential venues
+        # Emit: Found potential venues with enthusiasm
         if result.candidates:
+            venue_names = [c.venue_name for c in result.candidates[:3]]
             await emit_status("thinking", {
                 "action": "found",
-                "message": f"Found {len(result.candidates)} potential venues",
-                "detail": ", ".join([c.venue_name for c in result.candidates[:3]]) + ("..." if len(result.candidates) > 3 else ""),
+                "message": f"Found {len(result.candidates)} possibilities to consider",
+                "detail": f"Including {venue_names[0]}" + (f", {venue_names[1]}" if len(venue_names) > 1 else "") + "...",
+            })
+        else:
+            await emit_status("thinking", {
+                "action": "found",
+                "message": "Hmm, not finding great matches. Let me expand the search...",
+                "detail": "Trying alternative venues",
             })
 
         # Then verify visuals if enabled and we have candidates with photos
@@ -946,11 +967,11 @@ Rules for scoring:
                     interior_exterior=requirement.constraints.interior_exterior,
                 )
 
-                # Emit: Starting vision analysis
+                # Emit: Starting vision analysis with agentic personality
                 await emit_status("thinking", {
                     "action": "vision",
-                    "message": f"Analyzing {len(candidates_with_photos)} venue photos with AI vision...",
-                    "detail": f"Looking for: {requirement.vibe.primary.value} vibe, {requirement.constraints.interior_exterior}",
+                    "message": f"Let me analyze the photos to see which ones actually fit...",
+                    "detail": f"Need: {requirement.vibe.primary.value} aesthetic, {requirement.constraints.interior_exterior} shots",
                 })
 
                 result.candidates = await self.verify_candidates_visual(

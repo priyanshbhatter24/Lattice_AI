@@ -225,6 +225,15 @@ export default function Home() {
 
               // After a brief delay, move to accepted
               setTimeout(() => {
+                // Add decision to thinking log
+                setThinkingLog(prev => [{
+                  id: `decision-${candidate.id}`,
+                  action: "decision",
+                  message: `✓ ${candidate.venue_name} - this works!`,
+                  detail: `${Math.round(candidate.match_score * 100)}% match score`,
+                  timestamp: Date.now(),
+                }, ...prev].slice(0, 20));
+
                 // Update venuesByScene (keeps last venue per scene for backwards compat)
                 setVenuesByScene(prev => {
                   const next = new Map(prev);
@@ -256,6 +265,15 @@ export default function Home() {
               setRejectingReasons(rejectionReasons);
 
               setTimeout(() => {
+                // Add decision to thinking log
+                setThinkingLog(prev => [{
+                  id: `decision-${rejectedCandidate.id}`,
+                  action: "decision",
+                  message: `✗ ${rejectedCandidate.venue_name} - not quite right`,
+                  detail: rejectionReasons[0],
+                  timestamp: Date.now(),
+                }, ...prev].slice(0, 20));
+
                 // Add to rejected venues (prepend for top-to-bottom flow)
                 setRejectedVenues(prev => [
                   { venue: rejectedCandidate, reasons: rejectionReasons },
@@ -1010,254 +1028,102 @@ export default function Home() {
           </div>
         )}
 
-        {/* Grounding State - Finding Real Venues */}
+        {/* Grounding State - Image-focused Swipe Cards */}
         {state === "grounding" && (
           <div className="animate-fade-in">
-            {/* Progress Panel */}
-            <div className="paper-card mb-6 overflow-hidden">
-              <div className="p-4" style={{ background: "var(--color-accent)", color: "white" }}>
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="h-10 w-10 rounded-full flex items-center justify-center" style={{ background: "rgba(255,255,255,0.2)" }}>
-                      <svg className="h-5 w-5 animate-pulse" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                        <circle cx="12" cy="10" r="3" />
-                        <path d="M12 21.7C17.3 17 20 13 20 10a8 8 0 1 0-16 0c0 3 2.7 7 8 11.7z" />
-                      </svg>
-                    </div>
-                    <div>
-                      <p className="font-semibold">Finding Real Venues</p>
-                      <p className="text-sm opacity-80">{currentGroundingScene || "Initializing search..."}</p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <div className="flex items-center gap-2">
-                      <span className="text-2xl font-bold">{allVenues.length}</span>
-                      <span className="text-sm opacity-80">found</span>
-                    </div>
-                    <div className="flex items-center gap-2 px-3 py-1.5 rounded-full" style={{ background: "rgba(255,255,255,0.2)" }}>
-                      <div className="h-2 w-2 rounded-full animate-ping" style={{ background: "white" }} />
-                      <span className="text-sm font-medium">{Math.round(groundingProgress.percent)}%</span>
-                    </div>
-                  </div>
+            {/* Top: Thinking Ticker */}
+            <div
+              className="mb-4 px-4 py-2.5 rounded-lg flex items-center gap-3"
+              style={{ background: "var(--color-bg-muted)", border: "1px solid var(--color-border-subtle)" }}
+            >
+              <div className="flex-shrink-0">
+                <div
+                  className="h-6 w-6 rounded-full flex items-center justify-center"
+                  style={{ background: "var(--color-accent)" }}
+                >
+                  <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="white" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23.693L5 14.5" />
+                  </svg>
                 </div>
               </div>
-
-              {/* Progress bar */}
-              <div className="p-4">
-                <div className="flex justify-between text-xs mb-2" style={{ color: "var(--color-text-muted)" }}>
-                  <span>Scene {groundingProgress.processed} of {groundingProgress.total}</span>
-                  <span>Searching for up to 5 venues per scene</span>
+              <div className="flex-1 min-w-0 overflow-hidden">
+                <p className="text-sm truncate" style={{ color: "var(--color-text)" }}>
+                  {currentThinking || thinkingLog[0]?.message || "Starting search..."}
+                </p>
+              </div>
+              <div className="flex items-center gap-3 flex-shrink-0">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-lg font-bold" style={{ color: "var(--color-success)" }}>{allVenues.length}</span>
+                  <span className="text-xs" style={{ color: "var(--color-text-muted)" }}>yes</span>
                 </div>
-                <div className="h-2 rounded-full overflow-hidden" style={{ background: "var(--color-bg-muted)" }}>
-                  <div
-                    className="h-full rounded-full transition-all duration-300 animate-pulse-subtle"
-                    style={{ width: `${groundingProgress.percent}%`, background: "var(--color-accent)" }}
-                  />
+                <div className="flex items-center gap-1.5">
+                  <span className="text-lg font-bold" style={{ color: "var(--color-error)" }}>{rejectedVenues.length}</span>
+                  <span className="text-xs" style={{ color: "var(--color-text-muted)" }}>no</span>
                 </div>
               </div>
             </div>
 
-            {/* Currently Evaluating Panel */}
-            {consideringVenue && (
-              <div
-                className="paper-card mb-4 p-4 animate-fade-in"
-                style={{
-                  borderColor: isRejecting ? "var(--color-error)" : "var(--color-warning)",
-                  borderWidth: "2px",
-                  background: isRejecting ? "rgba(155, 59, 59, 0.05)" : undefined,
-                }}
-              >
-                <div className="flex items-center gap-4">
-                  {/* Status Icon */}
+            {/* Center: Decision Card Stage */}
+            <div className="flex justify-center mb-6">
+              <div className="relative" style={{ width: "100%", maxWidth: "400px", height: "380px" }}>
+                {/* Decision card */}
+                {consideringVenue ? (
+                  <SwipeDecisionCard
+                    venue={consideringVenue}
+                    isRejecting={isRejecting}
+                    rejectReason={rejectingReasons[0]}
+                  />
+                ) : (
+                  /* Waiting for next card */
                   <div
-                    className="h-12 w-12 rounded-lg flex items-center justify-center flex-shrink-0"
-                    style={{
-                      background: isRejecting ? "var(--color-error)" : "var(--color-warning)",
-                      opacity: isRejecting ? 1 : 0.15,
-                    }}
+                    className="absolute inset-0 rounded-xl flex flex-col items-center justify-center"
+                    style={{ background: "var(--color-bg-muted)", border: "2px dashed var(--color-border)" }}
                   >
-                    {isRejecting ? (
-                      <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="white" strokeWidth={2.5}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                      </svg>
-                    ) : (
-                      <div
-                        className="h-6 w-6 rounded-full border-2 animate-spin"
-                        style={{ borderColor: "var(--color-warning)", borderTopColor: "transparent" }}
-                      />
-                    )}
-                  </div>
-
-                  {/* Venue info */}
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-1">
-                      <span
-                        className="text-xs font-semibold uppercase tracking-wider"
-                        style={{ color: isRejecting ? "var(--color-error)" : "var(--color-warning)" }}
-                      >
-                        {isRejecting ? "Not a match" : "Evaluating"}
-                      </span>
-                      {!isRejecting && (
-                        <div className="flex gap-0.5">
-                          <div className="h-1 w-1 rounded-full animate-bounce" style={{ background: "var(--color-warning)" }} />
-                          <div className="h-1 w-1 rounded-full animate-bounce" style={{ background: "var(--color-warning)", animationDelay: "150ms" }} />
-                          <div className="h-1 w-1 rounded-full animate-bounce" style={{ background: "var(--color-warning)", animationDelay: "300ms" }} />
-                        </div>
-                      )}
+                    <div className="flex items-center gap-2 mb-3">
+                      <div className="h-3 w-3 rounded-full animate-bounce" style={{ background: "var(--color-accent)" }} />
+                      <div className="h-3 w-3 rounded-full animate-bounce" style={{ background: "var(--color-accent)", animationDelay: "150ms" }} />
+                      <div className="h-3 w-3 rounded-full animate-bounce" style={{ background: "var(--color-accent)", animationDelay: "300ms" }} />
                     </div>
-                    <h4 className="font-semibold truncate" style={{ color: "var(--color-text)" }}>
-                      {consideringVenue.venue_name}
-                    </h4>
-                    {isRejecting && rejectingReasons.length > 0 ? (
-                      <p className="text-xs truncate" style={{ color: "var(--color-error)" }}>
-                        {rejectingReasons[0]}
-                      </p>
-                    ) : (
-                      <p className="text-xs truncate" style={{ color: "var(--color-text-muted)" }}>
-                        {consideringVenue.formatted_address}
-                      </p>
-                    )}
+                    <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>
+                      {allVenues.length === 0 && rejectedVenues.length === 0
+                        ? "Finding venues..."
+                        : "Evaluating next venue..."}
+                    </p>
                   </div>
-
-                  {/* Score preview */}
-                  <div className="flex flex-col items-end flex-shrink-0">
-                    <span
-                      className="text-2xl font-bold"
-                      style={{ color: isRejecting ? "var(--color-error)" : "var(--color-text)" }}
-                    >
-                      {Math.round(consideringVenue.match_score * 100)}%
-                    </span>
-                    <span className="text-xs" style={{ color: "var(--color-text-muted)" }}>
-                      {isRejecting ? "too low" : "match score"}
-                    </span>
-                  </div>
-                </div>
+                )}
               </div>
-            )}
+            </div>
 
-            {/* Streaming venue grid - Accepted */}
+            {/* Bottom: Accepted Venues Grid */}
             {allVenues.length > 0 && (
-              <>
+              <div>
                 <div className="mb-3 flex items-center gap-2">
-                  <div className="h-2 w-2 rounded-full" style={{ background: "var(--color-success)" }} />
-                  <span className="text-sm font-medium" style={{ color: "var(--color-text-secondary)" }}>
-                    Accepted ({allVenues.length})
+                  <svg className="h-4 w-4" style={{ color: "var(--color-success)" }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <polyline points="20 6 9 17 4 12" />
+                  </svg>
+                  <span className="text-sm font-medium" style={{ color: "var(--color-text)" }}>
+                    Selected Venues ({allVenues.length})
                   </span>
                 </div>
-                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
                   {allVenues.map((venue, index) => (
-                    <VenueDiscoveryCard
+                    <VenueThumbnailCard
                       key={venue.id}
                       venue={venue}
-                      index={index}
                       isLatest={venue.id === latestVenueId}
                       onClick={() => setSelectedVenue(venue)}
                     />
                   ))}
                 </div>
-              </>
-            )}
-
-            {/* Agentic Thinking Panel - shows what the AI is doing */}
-            {(allVenues.length === 0 || thinkingLog.length > 0) && (
-              <div
-                className="paper-card mb-6 overflow-hidden"
-                style={{ borderColor: "var(--color-border)", background: "var(--color-bg-elevated)" }}
-              >
-                {/* Header */}
-                <div
-                  className="px-4 py-3 flex items-center gap-3"
-                  style={{ background: "var(--color-bg-muted)", borderBottom: "1px solid var(--color-border-subtle)" }}
-                >
-                  <div className="relative">
-                    <div
-                      className="h-8 w-8 rounded-full flex items-center justify-center"
-                      style={{ background: "var(--color-accent)" }}
-                    >
-                      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="white" strokeWidth={2}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23.693L5 14.5m14.8.8l1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0112 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5" />
-                      </svg>
-                    </div>
-                    <div
-                      className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full animate-pulse"
-                      style={{ background: "var(--color-success)", border: "2px solid var(--color-bg-elevated)" }}
-                    />
-                  </div>
-                  <div className="flex-1">
-                    <h3 className="text-sm font-semibold" style={{ color: "var(--color-text)" }}>
-                      AI Scout Agent
-                    </h3>
-                    <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>
-                      {currentThinking || "Initializing search..."}
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <div className="h-1.5 w-1.5 rounded-full animate-bounce" style={{ background: "var(--color-accent)" }} />
-                    <div className="h-1.5 w-1.5 rounded-full animate-bounce" style={{ background: "var(--color-accent)", animationDelay: "150ms" }} />
-                    <div className="h-1.5 w-1.5 rounded-full animate-bounce" style={{ background: "var(--color-accent)", animationDelay: "300ms" }} />
-                  </div>
-                </div>
-
-                {/* Thinking Log */}
-                <div className="p-4 max-h-48 overflow-y-auto" style={{ fontFamily: "var(--font-mono)" }}>
-                  {thinkingLog.length === 0 ? (
-                    <div className="flex items-center gap-2 text-xs" style={{ color: "var(--color-text-muted)" }}>
-                      <div className="h-4 w-4 rounded-full border-2 animate-spin" style={{ borderColor: "var(--color-accent)", borderTopColor: "transparent" }} />
-                      <span>Starting location search...</span>
-                    </div>
-                  ) : (
-                    <div className="space-y-2">
-                      {thinkingLog.slice(0, 8).map((entry, index) => (
-                        <div
-                          key={entry.id}
-                          className={`flex items-start gap-2 text-xs ${index === 0 ? "animate-fade-in" : ""}`}
-                          style={{
-                            color: index === 0 ? "var(--color-text)" : "var(--color-text-muted)",
-                            opacity: index === 0 ? 1 : Math.max(0.3, 1 - index * 0.15),
-                          }}
-                        >
-                          <span style={{ color: "var(--color-accent)" }}>
-                            {entry.action === "searching" && "🔍"}
-                            {entry.action === "found" && "📍"}
-                            {entry.action === "vision" && "👁️"}
-                            {entry.action === "evaluating" && "⚖️"}
-                            {entry.action === "scene" && "🎬"}
-                          </span>
-                          <div className="flex-1 min-w-0">
-                            <span>{entry.message}</span>
-                            {entry.detail && (
-                              <span className="block truncate" style={{ color: "var(--color-text-subtle)", fontSize: "10px" }}>
-                                {entry.detail}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
               </div>
             )}
 
-            {/* Rejected venues section */}
+            {/* Rejected count (small, below) */}
             {rejectedVenues.length > 0 && (
-              <div className="mt-8">
-                <div className="mb-3 flex items-center gap-2">
-                  <div className="h-2 w-2 rounded-full" style={{ background: "var(--color-error)" }} />
-                  <span className="text-sm font-medium" style={{ color: "var(--color-text-muted)" }}>
-                    Didn&apos;t make the cut ({rejectedVenues.length})
-                  </span>
-                </div>
-                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5">
-                  {rejectedVenues.map(({ venue, reasons }, index) => (
-                    <RejectedVenueCard
-                      key={venue.id}
-                      venue={venue}
-                      reasons={reasons}
-                      isLatest={venue.id === latestRejectedId}
-                    />
-                  ))}
-                </div>
+              <div className="mt-6 text-center">
+                <p className="text-xs" style={{ color: "var(--color-text-subtle)" }}>
+                  {rejectedVenues.length} venue{rejectedVenues.length !== 1 ? "s" : ""} didn&apos;t make the cut
+                </p>
               </div>
             )}
           </div>
@@ -2587,6 +2453,204 @@ function VenueCard({ venue, isLatest, onClick }: { venue: LocationCandidate; isL
             {venue.match_reasoning}
           </p>
         )}
+      </div>
+    </div>
+  );
+}
+
+// Swipe decision card - Large card showing venue being evaluated with swipe animation
+function SwipeDecisionCard({
+  venue,
+  isRejecting,
+  rejectReason,
+}: {
+  venue: LocationCandidate;
+  isRejecting: boolean;
+  rejectReason?: string;
+}) {
+  const [imageLoaded, setImageLoaded] = useState(false);
+  const [imageError, setImageError] = useState(false);
+  const hasPhoto = venue.photo_urls && venue.photo_urls.length > 0 && !imageError;
+
+  return (
+    <div
+      className={`absolute inset-0 rounded-xl overflow-hidden transition-all duration-300 ${
+        isRejecting ? "animate-swipe-left" : "animate-scale-in"
+      }`}
+      style={{
+        background: "var(--color-bg-card)",
+        boxShadow: isRejecting
+          ? "0 10px 40px rgba(155, 59, 59, 0.3)"
+          : "0 10px 40px rgba(44, 36, 22, 0.15)",
+        border: `2px solid ${isRejecting ? "var(--color-error)" : "var(--color-border)"}`,
+      }}
+    >
+      {/* Image area */}
+      <div className="relative h-52 overflow-hidden" style={{ background: "var(--color-bg-muted)" }}>
+        {hasPhoto ? (
+          <>
+            {!imageLoaded && <div className="absolute inset-0 animate-shimmer" />}
+            <img
+              src={venue.photo_urls[0]}
+              alt={venue.venue_name}
+              className={`w-full h-full object-cover transition-opacity duration-300 ${imageLoaded ? "opacity-100" : "opacity-0"}`}
+              onLoad={() => setImageLoaded(true)}
+              onError={() => setImageError(true)}
+            />
+          </>
+        ) : (
+          <div className="w-full h-full flex items-center justify-center">
+            <svg className="h-16 w-16" style={{ color: "var(--color-text-subtle)" }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v12a1.5 1.5 0 001.5 1.5zm10.5-11.25h.008v.008h-.008V8.25zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z" />
+            </svg>
+          </div>
+        )}
+
+        {/* Decision overlay */}
+        {isRejecting && (
+          <div className="absolute inset-0 bg-gradient-to-t from-red-900/80 to-red-900/20 flex items-center justify-center">
+            <div className="text-center">
+              <div className="h-16 w-16 mx-auto rounded-full flex items-center justify-center mb-2" style={{ background: "var(--color-error)" }}>
+                <svg className="h-8 w-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </div>
+              <p className="text-white font-semibold text-lg">Not a match</p>
+            </div>
+          </div>
+        )}
+
+        {/* Match score badge */}
+        {!isRejecting && (
+          <div
+            className="absolute top-3 right-3 px-3 py-1.5 rounded-full text-sm font-bold"
+            style={{
+              background: venue.match_score >= 0.7 ? "var(--color-success)" : "var(--color-warning)",
+              color: "white",
+            }}
+          >
+            {Math.round(venue.match_score * 100)}%
+          </div>
+        )}
+
+        {/* Considering indicator */}
+        {!isRejecting && (
+          <div className="absolute top-3 left-3 px-3 py-1.5 rounded-full text-xs font-semibold flex items-center gap-2" style={{ background: "rgba(0,0,0,0.6)", color: "white" }}>
+            <div className="h-2 w-2 rounded-full animate-pulse" style={{ background: "var(--color-warning)" }} />
+            Evaluating...
+          </div>
+        )}
+      </div>
+
+      {/* Info area */}
+      <div className="p-4">
+        <h3
+          className="text-lg font-semibold truncate mb-1"
+          style={{ fontFamily: "var(--font-display)", color: isRejecting ? "var(--color-error)" : "var(--color-text)" }}
+        >
+          {venue.venue_name}
+        </h3>
+        <p className="text-sm truncate mb-3" style={{ color: "var(--color-text-muted)" }}>
+          {venue.formatted_address}
+        </p>
+
+        {isRejecting && rejectReason ? (
+          <p className="text-sm" style={{ color: "var(--color-error)" }}>
+            {rejectReason}
+          </p>
+        ) : (
+          <div className="flex items-center gap-4 text-sm">
+            {venue.google_rating && (
+              <span className="flex items-center gap-1" style={{ color: "var(--color-text-secondary)" }}>
+                <svg className="h-4 w-4" fill="var(--color-warning)" viewBox="0 0 24 24">
+                  <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+                </svg>
+                {venue.google_rating.toFixed(1)}
+              </span>
+            )}
+            {venue.phone_number && (
+              <span className="flex items-center gap-1" style={{ color: "var(--color-success)" }}>
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z" />
+                </svg>
+                Has phone
+              </span>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Venue thumbnail card - small card for accepted venues grid
+function VenueThumbnailCard({
+  venue,
+  isLatest,
+  onClick,
+}: {
+  venue: LocationCandidate;
+  isLatest: boolean;
+  onClick: () => void;
+}) {
+  const [imageLoaded, setImageLoaded] = useState(false);
+  const [imageError, setImageError] = useState(false);
+  const hasPhoto = venue.photo_urls && venue.photo_urls.length > 0 && !imageError;
+
+  return (
+    <div
+      className={`paper-card overflow-hidden rounded-lg cursor-pointer transition-all hover:scale-[1.03] ${isLatest ? "animate-venue-pop" : ""}`}
+      style={{
+        height: "140px",
+        boxShadow: isLatest ? "0 0 0 2px var(--color-success)" : undefined,
+      }}
+      onClick={onClick}
+    >
+      {/* Image */}
+      <div className="relative h-20 overflow-hidden" style={{ background: "var(--color-bg-muted)" }}>
+        {hasPhoto ? (
+          <>
+            {!imageLoaded && <div className="absolute inset-0 animate-shimmer" />}
+            <img
+              src={venue.photo_urls[0]}
+              alt={venue.venue_name}
+              className={`w-full h-full object-cover transition-opacity ${imageLoaded ? "opacity-100" : "opacity-0"}`}
+              onLoad={() => setImageLoaded(true)}
+              onError={() => setImageError(true)}
+            />
+          </>
+        ) : (
+          <div className="w-full h-full flex items-center justify-center">
+            <svg className="h-6 w-6" style={{ color: "var(--color-text-subtle)" }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v12a1.5 1.5 0 001.5 1.5z" />
+            </svg>
+          </div>
+        )}
+
+        {/* Score badge */}
+        <div
+          className="absolute top-1 right-1 px-1.5 py-0.5 rounded text-[10px] font-bold"
+          style={{ background: "var(--color-success)", color: "white" }}
+        >
+          {Math.round(venue.match_score * 100)}%
+        </div>
+
+        {/* New indicator */}
+        {isLatest && (
+          <div
+            className="absolute top-1 left-1 px-1.5 py-0.5 rounded text-[10px] font-bold animate-pulse"
+            style={{ background: "var(--color-accent)", color: "white" }}
+          >
+            NEW
+          </div>
+        )}
+      </div>
+
+      {/* Info */}
+      <div className="p-2">
+        <p className="text-xs font-medium truncate" style={{ color: "var(--color-text)" }}>
+          {venue.venue_name}
+        </p>
       </div>
     </div>
   );

@@ -518,3 +518,67 @@ body::before {
 .animate-ping-slow {
   animation: ping-slow 1.5s cubic-bezier(0, 0, 0.2, 1) infinite;
 }
+
+/* Swipe left rejection animation */
+@keyframes swipe-left {
+  0% {
+    opacity: 1;
+    transform: translateX(0) rotate(0deg);
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(-200px) rotate(-12deg);
+  }
+}
+
+.animate-swipe-left {
+  animation: swipe-left 0.4s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+/* Swipe right acceptance animation */
+@keyframes swipe-right {
+  0% {
+    opacity: 1;
+    transform: translateX(0) rotate(0deg);
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(200px) rotate(12deg);
+  }
+}
+
+.animate-swipe-right {
+  animation: swipe-right 0.4s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+/* Card entrance animation */
+@keyframes card-enter {
+  0% {
+    opacity: 0;
+    transform: scale(0.9) translateY(30px);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.animate-card-enter {
+  animation: card-enter 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+/* Thinking ticker animation */
+@keyframes ticker-slide {
+  0% {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-ticker {
+  animation: ticker-slide 0.2s ease-out forwards;
+}
