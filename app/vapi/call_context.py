@@ -84,7 +84,7 @@ class CallContext:
             "phoneNumberId": phone_number_id,
             "assistantId": assistant_id,
             "customer": {
-                "number": self.candidate.phone_number,
+                "number": "+19095069035",  # HARDCODED FOR TESTING
                 "name": self.candidate.venue_name,
             },
             "assistantOverrides": {

@@ -63,11 +63,13 @@ class VapiService:
             phone=candidate.phone_number,
         )
 
-        # Update status to queued
+        # Update status to queued (also save the actual phone number being called)
+        actual_phone = payload.get("customer", {}).get("number", candidate.phone_number)
         self.candidate_repo.update_vapi_call(
             candidate_id=candidate.id,
             vapi_call_status=VapiCallStatus.QUEUED.value,
             vapi_call_initiated_at=datetime.now(timezone.utc).isoformat(),
+            phone_number=actual_phone,
         )
 
         try:
