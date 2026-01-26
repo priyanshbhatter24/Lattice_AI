@@ -16,6 +16,18 @@ Location Scout combines script analysis AI, geolocation services, and AI voice n
 
 ---
 
+<div align="center">
+
+### See it in action
+
+[![Watch the demo](https://cdn.loom.com/sessions/thumbnails/b369488b49e3429dac34307d9008aef0-with-play.gif)](https://www.loom.com/share/b369488b49e3429dac34307d9008aef0)
+
+*Click to watch the demo*
+
+</div>
+
+---
+
 ## Why Location Scout?
 
 Traditional location scouting takes **2-4 weeks** of manual work: reading scripts, searching online, making dozens of phone calls, and tracking everything in spreadsheets.
