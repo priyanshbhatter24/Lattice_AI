@@ -20,7 +20,7 @@ Location Scout combines script analysis AI, geolocation services, and AI voice n
 
 ### See it in action
 
-[![Watch the demo](https://cdn.loom.com/sessions/thumbnails/b369488b49e3429dac34307d9008aef0-with-play.gif)](https://www.loom.com/share/b369488b49e3429dac34307d9008aef0)
+[![Watch the demo](https://cdn.loom.com/sessions/thumbnails/b369488b49e3429dac34307d9008aef0-6d1f395766df8152.jpg)](https://www.loom.com/share/b369488b49e3429dac34307d9008aef0)
 
 *Click to watch the demo*
 
