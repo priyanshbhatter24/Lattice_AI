@@ -1,6 +1,6 @@
 <div align="center">
 
-# Location Scout
+# Scout
 
 ### AI-Powered Location Scouting for Film & Television
 
