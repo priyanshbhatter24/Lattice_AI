@@ -66,7 +66,7 @@ class LocationRequirement(BaseModel):
     # Search configuration
     target_city: str = "Los Angeles, CA"
     search_radius_km: float = 50.0
-    max_results: int = 10
+    max_results: int = 3
 
 
 class OpeningPeriod(BaseModel):
